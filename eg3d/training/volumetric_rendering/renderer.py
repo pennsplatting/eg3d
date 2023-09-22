@@ -140,6 +140,9 @@ class ImportanceRenderer(torch.nn.Module):
         return rgb_final, depth_final, weights.sum(2)
 
     def run_model(self, planes, decoder, sample_coordinates, sample_directions, options):
+        ## TODO: change the run_model function here!!!
+        ## instead of converting the feature images to tri-plane through "self.plane_axes",
+        ## we instead convert the feature images to 3DMM model
         sampled_features = sample_from_planes(self.plane_axes, planes, sample_coordinates, padding_mode='zeros', box_warp=options['box_warp'])
 
         out = decoder(sampled_features, sample_directions)
