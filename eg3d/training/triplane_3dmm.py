@@ -11,11 +11,18 @@
 import torch
 from torch_utils import persistence
 from training.networks_stylegan2 import Generator as StyleGAN2Backbone
-from training.volumetric_rendering.renderer import ImportanceRenderer
+# from training.volumetric_rendering.renderer import ImportanceRenderer
+from training.volumetric_rendering.renderer_3dmm import ImportanceRenderer ##replace with splatting renderer later
 from training.volumetric_rendering.ray_sampler import RaySampler
 import dnnlib
-from 3DMM_eg3d.BFMeg3d.py import BFMeg3dModel as 3dmmModel
-from 3DMM_eg3d.splatting.py import splatting as SplattingRenderer
+
+from threeDMM_eg3d.core import get_recon_model
+from threeDMM_eg3d.core.BFMeg3dModel import BFMeg3dModel as tdmmModel
+# from threeDMM_eg3d.core.BFM09Model import BFM09ReconModel as tdmmModel
+# from 3DMM_eg3d.splatting.py import splatting as SplattingRenderer
+
+from ipdb import set_trace as st
+import torch.nn as nn
 
 @persistence.persistent_class
 class TriPlaneGenerator(torch.nn.Module):
@@ -44,8 +51,18 @@ class TriPlaneGenerator(torch.nn.Module):
         self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
         self.neural_rendering_resolution = 64
         self.rendering_kwargs = rendering_kwargs
-    
+        
         self._last_planes = None
+        
+        ### TODO: -------- 3DMM mesh --------
+        st()
+        self.face_model = get_recon_model(model= 'bfm09', # args.recon_model,
+                                  device= 'cuda', #args.device,
+                                  batch_size=4, # TODO: Hard-coded, to be removed
+                                  img_size=64)
+        # self.face_model = nn.Linear(256, 256)
+        self.planes_to_coeffs_mlp = nn.Linear(256, 257)
+
     
     def mapping(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
         if self.rendering_kwargs['c_gen_conditioning_zero']:
@@ -75,10 +92,13 @@ class TriPlaneGenerator(torch.nn.Module):
 
         # Reshape output into three 32-channel planes
         ## TODO: convert from triplane to 3DMM here
-        planes = planes.view(len(planes), 3, 32, planes.shape[-2], planes.shape[-1])
+        planes_flatten = planes
+        planes = planes.view(len(planes), 3, 32, planes.shape[-2], planes.shape[-1]) # torch.Size([4, 3, 32, 256, 256])
 
+        ### ----- original eg3d version -----
         # Perform volume rendering
         feature_samples, depth_samples, weights_samples = self.renderer(planes, self.decoder, ray_origins, ray_directions, self.rendering_kwargs) # channels last
+        # feature_samples: [4, 4096, 32]
 
         # Reshape into 'raw' neural-rendered image
         H = W = self.neural_rendering_resolution
@@ -86,10 +106,29 @@ class TriPlaneGenerator(torch.nn.Module):
         depth_image = depth_samples.permute(0, 2, 1).reshape(N, 1, H, W)
 
         # Run superresolution to get final image
-        rgb_image = feature_image[:, :3]
+        rgb_image = feature_image[:, :3] # rgb: torch.Size([4, 3, 64, 64]), feature_image: torch.Size([4, 32, 64, 64])
+        st() # check feature image.shape
+        ### ----- original eg3d version [END] ----- 
+        
+        ### ----- 3DMM version -----
+        # coeffs = self.planes_to_coeffs_mlp(planes_flatten) # planes_flatten.shape: [4, 96, 256, 256]
+        coeffs = self.planes_to_coeffs_mlp(planes_flatten[:,0,0])
+        rgb_image = self.face_model(coeffs)
+        ### ----- 3DMM version [END] -----
+        
+        
+        st()
+        
+        
+        ## TODO: the below superresolution shall be kept?
         sr_image = self.superresolution(rgb_image, feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
 
         return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image}
+    
+    # def face_model_forward(self, coeffs, render=True):
+        
+        
+    #     return 0
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
         # Compute RGB features, density for arbitrary 3D coordinates. Mostly used for extracting shapes. 
@@ -98,7 +137,9 @@ class TriPlaneGenerator(torch.nn.Module):
         planes = planes.view(len(planes), 3, 32, planes.shape[-2], planes.shape[-1])
         # return self.renderer.run_model(planes, self.decoder, coordinates, directions, self.rendering_kwargs)
         ## TODO: map the planes to the 3DMM model
-        face_model = 3dmmModel.fit_feature_planes(planes)
+        st()
+        print('')
+        face_model = tdmmModel.fit_feature_planes(planes)
         ## TODO2: check whether the self.decoder can be kept or not
         return self.renderer.run_model(face_model, self.decoder, coordinates, directions, self.rendering_kwargs)
 

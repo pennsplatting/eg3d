@@ -20,6 +20,8 @@ import torch.nn as nn
 from training.volumetric_rendering.ray_marcher import MipRayMarcher2
 from training.volumetric_rendering import math_utils
 
+from ipdb import set_trace as st
+
 def generate_planes():
     """
     Defines planes by the three vectors that form the "axes" of the
@@ -143,11 +145,28 @@ class ImportanceRenderer(torch.nn.Module):
         ## TODO: change the run_model function here!!!
         ## instead of converting the feature images to tri-plane through "self.plane_axes",
         ## we instead convert the feature images to 3DMM model
+       
+        ### ----- original eg3d version -----
         sampled_features = sample_from_planes(self.plane_axes, planes, sample_coordinates, padding_mode='zeros', box_warp=options['box_warp'])
-
         out = decoder(sampled_features, sample_directions)
         if options.get('density_noise', 0) > 0:
             out['sigma'] += torch.randn_like(out['sigma']) * options['density_noise']
+        #### ----- --------- ------- ----- -----
+        
+        ''' variables & shapes
+        planes: torch.Size([4, 3, 32, 256, 256])
+        sample_coordinates: torch.Size([4, 196608, 3])
+        sampled_features: torch.Size([4, 3, 196608, 32])
+        out: dict_keys(['rgb', 'sigma'])
+            out['rgb'].shape: torch.Size([4, 196608, 32])
+            out['sigma'].shape: torch.Size([4, 196608, 1])
+        '''
+        
+        # ## ----- 3DMM vesion (replace both the tri-plane and the renderer) -----
+        # tdmm_out = 
+        # out = post_process_tdmm_out(tdmm_out)
+        # FIXME: do not modify here. Use 3DMM's own renderer
+        
         return out
 
     def sort_samples(self, all_depths, all_colors, all_densities):
