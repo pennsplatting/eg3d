@@ -23,8 +23,9 @@ from pytorch3d.io import load_obj
 import torch.nn.functional as F
 
 from gaussian_splatting.gaussian_model import GaussianModel
-from gaussian_splatting.cameras import Camera
+from gaussian_splatting.cameras import MiniCam
 from gaussian_splatting.renderer import render
+import numpy as np
 
 @persistence.persistent_class
 class TriPlaneGenerator(torch.nn.Module):
@@ -160,11 +161,21 @@ class TriPlaneGenerator(torch.nn.Module):
         
         ### ----- gaussian splatting -----
         # camera setting 
-        # TODO: the inputs?
-        viewpoint_camera = Camera() 
+        # TODO: determine the inputs
+        # width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform
+        world_view_transform = torch.tensor(
+            [0.0, 0.0, 10.0], device='cuda').reshape(1, 1, 3)
+        focal = 1015
+        half_image_width = 128
+        fovy = fovx = 2*np.arctan(half_image_width/focal)*180./np.pi
+        full_proj_transform = np.array([focal, 0.0, half_image_width,
+                             0.0, focal, half_image_width,
+                             0.0, 0.0, 1.0], dtype=np.float32).reshape(1, 3, 3)
+        full_proj_transform = torch.tensor(full_proj_transform, device='cuda')
+        viewpoint_camera = MiniCam(256, 256, fovy, fovx, 0.01, 50, world_view_transform, full_proj_transform)
 
         # create a guassian model using generated texture
-        gaussian = GaussianModel(sh_degree=4)
+        gaussian = GaussianModel(sh_degree=3)
         gaussian.create_from_generated_texture(v, textures)
 
         # raterization

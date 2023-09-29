@@ -45,7 +45,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         sh_degree=pc.active_sh_degree,
         campos=viewpoint_camera.camera_center,
         prefiltered=False,
-        debug=pipe.debug
+        # debug=pipe.debug
+        debug=False
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -59,25 +60,25 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     scales = None
     rotations = None
     cov3D_precomp = None
-    if pipe.compute_cov3D_python:
-        cov3D_precomp = pc.get_covariance(scaling_modifier)
-    else:
-        scales = pc.get_scaling
-        rotations = pc.get_rotation
+    # if pipe.compute_cov3D_python:
+    #     cov3D_precomp = pc.get_covariance(scaling_modifier)
+    # else:
+    scales = pc.get_scaling
+    rotations = pc.get_rotation
 
     # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
     shs = None
     colors_precomp = None
     if override_color is None:
-        if pipe.convert_SHs_python:
-            shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
-            dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
-            dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-            sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
-            colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
-        else:
-            shs = pc.get_features
+        # if pipe.convert_SHs_python:
+        #     shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
+        #     dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
+        #     dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
+        #     sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
+        #     colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
+        # else:
+        shs = pc.get_features
     else:
         colors_precomp = override_color
 

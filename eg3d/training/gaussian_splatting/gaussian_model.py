@@ -125,7 +125,7 @@ class GaussianModel:
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
-        features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda() # [N, 3, 16]
         features[:, :3, 0 ] = fused_color
         features[:, 3:, 1:] = 0.0
 
@@ -151,6 +151,8 @@ class GaussianModel:
         self._xyz = nn.Parameter(vertices.requires_grad_(False))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
+
+        # TODO: no need of scaling or rotation (because we use face templates)
         # self._scaling = nn.Parameter(scales.requires_grad_(True))
         # self._rotation = nn.Parameter(rots.requires_grad_(True))
         # self._opacity = nn.Parameter(opacities.requires_grad_(True))
