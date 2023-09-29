@@ -22,6 +22,10 @@ import torch.nn as nn
 from pytorch3d.io import load_obj
 import torch.nn.functional as F
 
+from gaussian_splatting.gaussian_model import GaussianModel
+from gaussian_splatting.cameras import Camera
+from gaussian_splatting.renderer import render
+
 @persistence.persistent_class
 class TriPlaneGenerator(torch.nn.Module):
     def __init__(self,
@@ -154,7 +158,23 @@ class TriPlaneGenerator(torch.nn.Module):
         
         st() # save rendering result from self.rasterize
         
-        
+        ### ----- gaussian splatting -----
+        # camera setting 
+        # TODO: the inputs?
+        viewpoint_camera = Camera() 
+
+        # create a guassian model using generated texture
+        gaussian = GaussianModel(sh_degree=4)
+        gaussian.create_from_generated_texture(v, textures)
+
+        # raterization
+        white_background = False
+        bg_color = [1,1,1] if white_background else [0, 0, 0]
+        background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+        rgb_image = render(viewpoint_camera, gaussian, None, background)
+
+        ### ----- gaussian splatting [END] -----
+                
         ## TODO: the below superresolution shall be kept?
         sr_image = self.superresolution(rgb_image, feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
 
