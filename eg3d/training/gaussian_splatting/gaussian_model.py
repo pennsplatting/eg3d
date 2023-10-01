@@ -148,14 +148,53 @@ class GaussianModel:
 
     # TODO: create gaussian from generated texture
     def create_from_generated_texture(self, vertices, features):
-        self._xyz = nn.Parameter(vertices.requires_grad_(False))
+        # TODO: freeze some parameters, like self._xyz?
+        self._xyz = nn.Parameter(vertices.requires_grad_(True))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
 
-        # TODO: no need of scaling or rotation (because we use face templates)
+        # TODO: do we still need scaling or rotation?
         # self._scaling = nn.Parameter(scales.requires_grad_(True))
         # self._rotation = nn.Parameter(rots.requires_grad_(True))
         # self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+
+    # for test
+    def create_from_ply(self, path, spatial_lr_scale : float):
+        plydata = PlyData.read(path)
+
+        xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
+                        np.asarray(plydata.elements[0]["y"]),
+                        np.asarray(plydata.elements[0]["z"])),  axis=1)
+
+
+        features = torch.zeros((xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda() # [N, 3, 16]
+
+        features_dc = np.zeros((xyz.shape[0], 3, 1))
+        features_dc = np.stack((np.asarray(plydata.elements[0]["red"]),
+                                np.asarray(plydata.elements[0]["green"]),
+                                np.asarray(plydata.elements[0]["blue"])), axis=1)
+        features[:, :3, 0 ] = RGB2SH(torch.tensor(features_dc, dtype=torch.float, device="cuda"))
+        features[:, 3:, 1:] = 0.0
+
+        # self.active_sh_degree = self.max_sh_degree
+
+        print("Number of points at initialisation : ", xyz.shape[0])
+
+        dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(xyz)).float().cuda()), 0.0000001)
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
+        rots = torch.zeros((xyz.shape[0], 4), device="cuda")
+        rots[:, 0] = 1
+
+        opacities = inverse_sigmoid(0.1 * torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda"))
+        # opacities = torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda")
+
+        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
+        self._scaling = nn.Parameter(scales.requires_grad_(True))
+        self._rotation = nn.Parameter(rots.requires_grad_(True))
+        self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def training_setup(self, training_args):
