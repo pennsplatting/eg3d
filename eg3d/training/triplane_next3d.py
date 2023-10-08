@@ -53,7 +53,8 @@ class TriPlaneGenerator(torch.nn.Module):
         self._last_planes = None
         
         ### TODO: -------- next3d 3d face model --------
-        self.topology_path = '/mnt/kostas-graid/datasets/xuyimeng/ffhq/head_template.obj' # DECA model
+        # self.topology_path = '/mnt/kostas-graid/datasets/xuyimeng/ffhq/head_template.obj' # DECA model
+        self.topology_path = 'out/ply/seed0000_head_template2_xzymean125_final.ply' # aligned with eg3d mesh in both scale and cam coord
         self.load_lms = True
         
         # set pytorch3d rasterizer
@@ -92,10 +93,77 @@ class TriPlaneGenerator(torch.nn.Module):
                 c = torch.zeros_like(c)
         return self.backbone.mapping(z, c * self.rendering_kwargs.get('c_scale', 0), truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff, update_emas=update_emas)
 
+    def project3d_to_2d(self, intrinsic_matrix, c2w, fname):
+        import numpy as np 
+        import cv2 
+
+        # Define intrinsic camera parameters 
+        focal_length = 500
+        image_width = 256
+        image_height = 256
+        # intrinsic_matrix = np.array([ 
+        #     [focal_length, 0, image_width/2], 
+        #     [0, focal_length, image_height/2], 
+        #     [0, 0, 1] 
+        # ]) 
+        cam_matrix = intrinsic_matrix.detach().cpu().numpy()
+        cam_matrix[:2] = cam_matrix[:2]*image_height
+        cam_matrix = np.matmul(cam_matrix, c2w.detach().cpu().numpy()[:3])
+        # cam_matrix = cam_matrix_torch.detach().cpu().numpy()
+        # # st()
+
+        # Define extrinsic camera parameters 
+        # rvec = np.array([0, 0, 0], dtype=np.float32) 
+        # tvec = np.array([0, 0, 0], dtype=np.float32).reshape(-1, 1)
+        # rvec = np.zeros((3, 1), np.float32) 
+        # tvec = np.zeros((3, 1), np.float32) 
+
+        # Generate 3D points on a paraboloid 
+        u_range = np.linspace(0, 1, num=40) 
+        v_range = np.linspace(0, 1, num=40) 
+        u, v = np.meshgrid(u_range, v_range) 
+        x = u 
+        y = v 
+        z = u**2 + v**2
+
+        points_3d = np.stack([x, y, z], axis=-1).reshape(-1, 3) 
+
+        # Project 3D points onto 2D plane 
+        # points_2d, _ = cv2.projectPoints(points_3d, 
+        #                                 rvec, tvec, 
+        #                                 cam_matrix, 
+        #                                 None) 
+      
+        points_3d_homo = np.concatenate([points_3d, np.zeros((points_3d.shape[0],1), np.float32)], axis=-1)
+        # st()
+        points_homo = np.matmul(cam_matrix, points_3d_homo.T).T
+        points_2d = points_homo[:,:2] / points_homo[:,2:3]
+        points_2d = points_2d[:,None]
+        # st()
+        # Plot 2D points 
+        img = np.zeros((image_height, image_width), 
+                    dtype=np.uint8) 
+        # st()
+        for point in points_2d.astype(int): 
+            img = cv2.circle(img, tuple(point[0]), 2, 255, -1) 
+            
+        cv2.imwrite(fname, img)
+        print('Saved to ', fname)
+        if not intrinsic_matrix.sum()==0:
+            st()
+        # cv2.imshow('Image', img) 
+        # cv2.waitKey(0) 
+        # cv2.destroyAllWindows() 
+
+            
     def synthesis(self, ws, c, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):
         cam2world_matrix = c[:, :16].view(-1, 4, 4)
         intrinsics = c[:, 16:25].view(-1, 3, 3)
+        ## TODO: test the rendering coord systems are consistent by projecting the vertices through c2w
+        for i, (_intrx, _c2w) in enumerate(zip(intrinsics, cam2world_matrix)):
+            self.project3d_to_2d(_intrx, _c2w, f"proj_{i}.png")
 
+        # st()
         if neural_rendering_resolution is None:
             neural_rendering_resolution = self.neural_rendering_resolution
         else:
@@ -135,20 +203,21 @@ class TriPlaneGenerator(torch.nn.Module):
         ### ----- original eg3d version [END] ----- 
         
         ### ----- next3d version -----
-        # split vertices and landmarks 
-        batch_size = ws.shape[0]
-        if self.load_lms:
-            ## TODO: to find out where the v is passed in
-            v = (self.verts).repeat(batch_size,1,1).to(ws.device)
-            v, lms = v[:, :5023], v[:, 5023:]
-        rendering_views = [
-            [0, 0, 0],
-            [0, 90, 0],
-            # [0, -90, 0],
-            # [90, 0, 0]
-        ]# use next3d rendering views first. If can rendered correctly, replace with eg3d c2w/w2c! Be aware!
+        # # split vertices and landmarks 
+        # batch_size = ws.shape[0]
+        # if self.load_lms:
+        #     ## TODO: to find out where the v is passed in
+        #     v = (self.verts).repeat(batch_size,1,1).to(ws.device)
+        #     # v, lms = v[:, :5023], v[:, 5023:]
+        #     lms = None
+        # rendering_views = [
+        #     [0, 0, 0],
+        #     [0, 90, 0],
+        #     # [0, -90, 0],
+        #     # [90, 0, 0]
+        # ]# use next3d rendering views first. If can rendered correctly, replace with eg3d c2w/w2c! Be aware!
         
-        rendering_images, alpha_images, uvcoords_images, lm2ds = self.rasterize(v, lms, textures, rendering_views, batch_size, ws.device)
+        # # rendering_images, alpha_images, uvcoords_images, lm2ds = self.rasterize(v, lms, textures, rendering_views, batch_size, ws.device)
 
         ### ----- next3d version [END] -----
         
@@ -164,10 +233,9 @@ class TriPlaneGenerator(torch.nn.Module):
     def rasterize(self, v, lms, textures, tforms, batch_size, device):
         rendering_images, alpha_images, uvcoords_images, transformed_lms = [], [], [], []
 
-
         for tform in tforms:
-            v_flip, lms_flip = v.detach().clone(), lms.detach().clone()
-            v_flip[..., 1] *= -1; lms_flip[..., 1] *= -1
+            # v_flip, lms_flip = v.detach().clone(), lms.detach().clone()
+            # v_flip[..., 1] *= -1; lms_flip[..., 1] *= -1
             # rasterize texture to three orthogonal views
             st()
             tform = angle2matrix(torch.tensor(tform).reshape(1, -1)).expand(batch_size, -1, -1).to(device)
