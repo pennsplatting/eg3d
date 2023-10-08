@@ -22,6 +22,13 @@ import torch.nn as nn
 from pytorch3d.io import load_obj
 import torch.nn.functional as F
 
+from gaussian_splatting.gaussian_model import GaussianModel
+from gaussian_splatting.cameras import MiniCam
+from gaussian_splatting.renderer import render
+from pytorch3d.renderer import look_at_view_transform
+from gaussian_splatting.utils.graphics_utils import getWorld2View, getProjectionMatrix
+import numpy as np
+
 @persistence.persistent_class
 class TriPlaneGenerator(torch.nn.Module):
     def __init__(self,
@@ -223,7 +230,32 @@ class TriPlaneGenerator(torch.nn.Module):
         
         st() # save rendering result from self.rasterize
         
-        
+        ### ----- gaussian splatting -----
+        # camera setting 
+        # TODO: determine the inputs
+        # width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform
+        R, T = look_at_view_transform(10, 0, 0)
+        world_view_transform = getWorld2View(R, T).transpose(0, 1).cuda() 
+        focal = 1015
+        half_image_width = 128
+        fovy = fovx = 2*np.arctan(half_image_width/focal)*180./np.pi
+        projection_matrix = getProjectionMatrix(0.01, 50, fovx, fovy).transpose(0, 1).cuda()
+        full_proj_transform = world_view_transform @ projection_matrix
+        viewpoint_camera = MiniCam(256, 256, fovy, fovx, 0.01, 50, world_view_transform, full_proj_transform)
+
+        # create a guassian model using generated texture
+        gaussian = GaussianModel(sh_degree=3)
+        # TODO: map textures to gaussian features 
+        gaussian.create_from_generated_texture(v, textures) 
+
+        # raterization
+        white_background = False
+        bg_color = [1,1,1] if white_background else [0, 0, 0]
+        background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+        rgb_image = render(viewpoint_camera, gaussian, None, background)["render"]
+
+        ### ----- gaussian splatting [END] -----
+                
         ## TODO: the below superresolution shall be kept?
         sr_image = self.superresolution(rgb_image, feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
 
