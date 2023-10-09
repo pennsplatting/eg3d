@@ -12,8 +12,9 @@
 import torch
 import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
-from gaussian_model import GaussianModel
-from utils.sh_utils import eval_sh
+from training.gaussian_splatting.gaussian_model import GaussianModel
+from training.gaussian_splatting.utils.sh_utils import eval_sh
+from ipdb import set_trace as st
 
 def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None):
     """

@@ -12,7 +12,8 @@
 import torch
 from torch import nn
 import numpy as np
-from utils.graphics_utils import getWorld2View2, getProjectionMatrix
+from training.gaussian_splatting.utils.graphics_utils import getWorld2View2, getProjectionMatrix
+from ipdb import set_trace as st
 
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
@@ -66,6 +67,27 @@ class MiniCam:
         self.zfar = zfar
         self.world_view_transform = world_view_transform
         self.full_proj_transform = full_proj_transform
-        view_inv = torch.inverse(self.world_view_transform)
+        if not torch.all(self.world_view_transform==0): 
+            view_inv = torch.inverse(self.world_view_transform) 
+        else:
+            view_inv = self.world_view_transform
         self.camera_center = view_inv[3][:3]
+        
+    def update_transforms(self, world_view_transform, full_proj_transform):
+        self.world_view_transform = world_view_transform
+        self.full_proj_transform = full_proj_transform
+        if not torch.all(self.world_view_transform==0): 
+            view_inv = torch.inverse(self.world_view_transform) 
+        else:
+            view_inv = self.world_view_transform
+        self.camera_center = view_inv[3][:3]
+
+## TODO: implement inheritance
+# class MiniCam2(MiniCam):
+#     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
+#                  image_name, uid,
+#                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda"
+#                  ):
+#         super(MiniCam, self).__init__()
+    
 

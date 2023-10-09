@@ -11,15 +11,18 @@
 
 import torch
 import numpy as np
-from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
+from training.gaussian_splatting.utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from torch import nn
 import os
-from utils.system_utils import mkdir_p
+from training.gaussian_splatting.utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
-from utils.sh_utils import RGB2SH
+from training.gaussian_splatting.utils.sh_utils import RGB2SH
+# from training.gaussian_splatting.submodules.simple_knn._C import distCUDA2
 from simple_knn._C import distCUDA2
-from utils.graphics_utils import BasicPointCloud
-from utils.general_utils import strip_symmetric, build_scaling_rotation
+from training.gaussian_splatting.utils.graphics_utils import BasicPointCloud
+from training.gaussian_splatting.utils.general_utils import strip_symmetric, build_scaling_rotation
+
+from ipdb import set_trace as st
 
 class GaussianModel:
 
@@ -149,7 +152,7 @@ class GaussianModel:
     # TODO: create gaussian from generated texture
     def create_from_generated_texture(self, vertices, features):
         # TODO: freeze some parameters, like self._xyz?
-        self._xyz = nn.Parameter(vertices.requires_grad_(True))
+        self._xyz = nn.Parameter(vertices.requires_grad_(False)) # set requires_grad_(False) since we use a fixed face model
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
 
@@ -190,6 +193,32 @@ class GaussianModel:
         # opacities = torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda")
 
         self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
+        self._scaling = nn.Parameter(scales.requires_grad_(True))
+        self._rotation = nn.Parameter(rots.requires_grad_(True))
+        self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+    
+    # for test
+    def create_from_ply2(self, xyz, feature_uv):
+
+        N, C, _ , V = feature_uv.shape
+        features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 32] [V, 3, C']
+
+        # self.active_sh_degree = self.max_sh_degree
+
+        print("Number of points at initialisation : ", xyz.shape[0])
+
+        dist2 = torch.clamp_min(distCUDA2(xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
+        rots = torch.zeros((xyz.shape[0], 4), device="cuda")
+        rots[:, 0] = 1
+
+        opacities = inverse_sigmoid(0.1 * torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda"))
+        # opacities = torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda")
+
+        self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(True))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
         self._scaling = nn.Parameter(scales.requires_grad_(True))

@@ -113,7 +113,7 @@ class StyleGAN2Loss(Loss):
                 f = torch.arange(-blur_size, blur_size + 1, device=real_img_raw.device).div(blur_sigma).square().neg().exp2()
                 real_img_raw = upfirdn2d.filter2d(real_img_raw, f / f.sum())
 
-        real_img = {'image': real_img, 'image_raw': real_img_raw}
+        real_img = {'image': real_img, 'image_raw': real_img_raw} # no loss is calculated based on depth 
 
         # Gmain: Maximize logits for generated images.
         if phase in ['Gmain', 'Gboth']:

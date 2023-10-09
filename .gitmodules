@@ -1,3 +1,7 @@
 [submodule "dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch"]
 	path = dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch
 	url = https://github.com/sicxu/Deep3DFaceRecon_pytorch.git
+
+[submodule "submodules/diff-gaussian-rasterization"]
+	path = eg3d/training/gaussian_splatting/submodules/diff-gaussian-rasterization
+	url = https://github.com/graphdeco-inria/diff-gaussian-rasterization
