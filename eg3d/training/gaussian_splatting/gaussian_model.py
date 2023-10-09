@@ -45,7 +45,8 @@ class GaussianModel:
 
 
     def __init__(self, sh_degree : int):
-        self.active_sh_degree = 0
+        # self.active_sh_degree = 0
+        self.active_sh_degree = sh_degree
         self.max_sh_degree = sh_degree  
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)

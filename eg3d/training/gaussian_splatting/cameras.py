@@ -13,6 +13,7 @@ import torch
 from torch import nn
 import numpy as np
 from training.gaussian_splatting.utils.graphics_utils import getWorld2View2, getProjectionMatrix
+import math
 from ipdb import set_trace as st
 
 class Camera(nn.Module):
@@ -58,24 +59,31 @@ class Camera(nn.Module):
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
 class MiniCam:
-    def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):
+    def __init__(self, c, width, height, znear, zfar, device):
         self.image_width = width
         self.image_height = height    
-        self.FoVy = fovy
-        self.FoVx = fovx
+        # self.FoVy = fovy
+        # self.FoVx = fovx
         self.znear = znear
         self.zfar = zfar
-        self.world_view_transform = world_view_transform
-        self.full_proj_transform = full_proj_transform
-        if not torch.all(self.world_view_transform==0): 
-            view_inv = torch.inverse(self.world_view_transform) 
-        else:
-            view_inv = self.world_view_transform
-        self.camera_center = view_inv[3][:3]
+        self.world_view_transform = None
+        self.full_proj_transform = None
+        self.camera_center = None
+        # if not torch.all(self.world_view_transform==0): 
+        #     view_inv = torch.inverse(self.world_view_transform) 
+        # else:
+        #     view_inv = self.world_view_transform
+        # self.camera_center = view_inv[3][:3]
         
-    def update_transforms(self, world_view_transform, full_proj_transform):
+        intrinsics = c[:, 16:25].view(-1, 3, 3)
+        focal = intrinsics[0,0,1] * self.image_width # check
+        fov = 2*torch.arctan(self.image_width/2/focal)*180./math.pi
+        self.FoVx = self.FoVy = fov
+        self.projection_matrix = getProjectionMatrix(self.znear, self.zfar, fov, fov).transpose(0, 1).to(device)
+        
+    def update_transforms(self, world_view_transform):
         self.world_view_transform = world_view_transform
-        self.full_proj_transform = full_proj_transform
+        self.full_proj_transform = world_view_transform @ self.projection_matrix
         if not torch.all(self.world_view_transform==0): 
             view_inv = torch.inverse(self.world_view_transform) 
         else:

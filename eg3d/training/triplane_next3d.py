@@ -40,6 +40,7 @@ class TriPlaneGenerator(torch.nn.Module):
         w_dim,                      # Intermediate latent (W) dimensionality.
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
+        sh_degree,                  # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
         rendering_kwargs    = {},
@@ -63,8 +64,8 @@ class TriPlaneGenerator(torch.nn.Module):
         self._last_planes = None
         
         ### TODO: -------- next3d 3d face model --------
-        self.topology_path = '/mnt/kostas-graid/datasets/xuyimeng/ffhq/head_template.obj' # DECA model
-        self.verts_path = 'out/ply/seed0000_head_template2_xzymean125_final.ply' # aligned with eg3d mesh in both scale and cam coord
+        self.topology_path = '/home/1TB/model/head_template.obj' # DECA model
+        self.verts_path = '/home/1TB/model/seed0000_head_template2_xzymean125.ply' # aligned with eg3d mesh in both scale and cam coord
         self.load_lms = True
         
         # set pytorch3d rasterizer
@@ -104,8 +105,10 @@ class TriPlaneGenerator(torch.nn.Module):
         
         ### -------- gaussian splatting render --------
         self.gaussian_splatting_use_sr = False
-        # self.viewpoint_camera = MiniCam(half_image_width*2, half_image_width*2, fovy, fovx, z_near, z_far, world_view_transform, full_proj_transform)
-
+        self.sh_degree = sh_degree
+        self.gaussian = None
+        self.viewpoint_camera = None
+        
     def load_aligend_verts(self, ply_path):
         plydata = PlyData.read(ply_path)
         v_np = np.array(plydata['vertex'].data.tolist())
@@ -194,7 +197,7 @@ class TriPlaneGenerator(torch.nn.Module):
             
     def synthesis(self, ws, c, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):
         cam2world_matrix = c[:, :16].view(-1, 4, 4)
-        intrinsics = c[:, 16:25].view(-1, 3, 3)
+        # intrinsics = c[:, 16:25].view(-1, 3, 3)
         
         if neural_rendering_resolution is None:
             neural_rendering_resolution = self.neural_rendering_resolution
@@ -247,42 +250,46 @@ class TriPlaneGenerator(torch.nn.Module):
         ## V1: gaussian rendering -> 64 x 64 -> sr module --> 256 x 256: self.gaussian_splatting_use_sr = True
         ## v2: gausian rendering -> 256 x 256 : self.gaussian_splatting_use_sr = False
         if self.gaussian_splatting_use_sr:
-            half_image_width = self.neural_rendering_resolution / 2 # chekc
+            image_size = self.neural_rendering_resolution # chekc
         else:
-            half_image_width = 256
+            image_size = 256
         
         # # replace the hard-coded focal with intrinsics from c
         # focal = 1015 
-        focal = intrinsics[0,0,1] * half_image_width * 2 # check
-        fovy = fovx = 2*torch.arctan(half_image_width/focal)*180./math.pi
+        # focal = intrinsics[0,0,1] * half_image_width * 2 # check
+        # fovy = fovx = 2*torch.arctan(half_image_width/focal)*180./math.pi
         
         # TODO: modify z-near and z-far in projection matrix
         # projection_matrix = getProjectionMatrix(0.01, 50, fovx, fovy).transpose(0, 1)
         z_near, z_far = 10, 500
         # st()
-        projection_matrix = getProjectionMatrix(z_near, z_far, fovx, fovy).transpose(0, 1).to(world_view_transform_batch.device)
+        # projection_matrix = getProjectionMatrix(z_near, z_far, fovx, fovy).transpose(0, 1).to(world_view_transform_batch.device)
         rgb_image_batch = []
+        
+        # initialize camera and gaussians
+        self.viewpoint_camera = MiniCam(c, image_size, image_size, z_near, z_far, world_view_transform_batch.device)
+        self.gaussian = GaussianModel(self.sh_degree)
+        
         for world_view_transform, textures_gen in zip(world_view_transform_batch,textures_gen_batch):
-            full_proj_transform = world_view_transform @ projection_matrix
-            viewpoint_camera = MiniCam(half_image_width*2, half_image_width*2, fovy, fovx, z_near, z_far, world_view_transform, full_proj_transform)
-            # self.viewpoint_camera.update_transform(world_view_transform, full_proj_transform)
+            # full_proj_transform = world_view_transform @ projection_matrix
+            self.viewpoint_camera.update_transforms(world_view_transform)
 
             # create a guassian model using generated texture
             # TODO: change the input feature channel
-            gaussian = GaussianModel(sh_degree=3)
+            # gaussian = GaussianModel(sh_degree=3)
             # map textures to gaussian features 
     
             ## TODO: can gaussiam splatting run batch in parallel?
             textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.detach().unsqueeze(1), align_corners=False)
             # gaussian.create_from_generated_texture(self.verts, textures)
-            gaussian.create_from_ply2(self.verts, textures)
+            self.gaussian.create_from_ply2(self.verts, textures)
 
             # raterization
             white_background = False
             bg_color = [1,1,1] if white_background else [0, 0, 0]
             background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
             
-            _rgb_image = gs_render(viewpoint_camera, gaussian, None, background)["render"]
+            _rgb_image = gs_render(self.viewpoint_camera, self.gaussian, None, background)["render"]
             rgb_image_batch.append(_rgb_image[None])
         
         rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
