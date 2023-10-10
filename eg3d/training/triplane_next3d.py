@@ -40,7 +40,7 @@ class TriPlaneGenerator(torch.nn.Module):
         w_dim,                      # Intermediate latent (W) dimensionality.
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
-        sh_degree,                  # Spherical harmonics degree.
+        sh_degree           = 3,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
         rendering_kwargs    = {},
@@ -252,7 +252,7 @@ class TriPlaneGenerator(torch.nn.Module):
         if self.gaussian_splatting_use_sr:
             image_size = self.neural_rendering_resolution # chekc
         else:
-            image_size = 256
+            image_size = 512
         
         # # replace the hard-coded focal with intrinsics from c
         # focal = 1015 
