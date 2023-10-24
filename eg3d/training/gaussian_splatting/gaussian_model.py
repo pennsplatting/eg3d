@@ -199,8 +199,13 @@ class GaussianModel:
     # for test
     def create_from_ply2(self, xyz, feature_uv):
 
+        # FIXME: restore this after debug
+        xyz /= 50.0
         N, C, _ , V = feature_uv.shape
         features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 32] [V, 3, C']
+        # features = torch.zeros((xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        # features[:, :3, 0 ] = RGB2SH(feature_uv) # (53215, 3)
+        # features[:, 3:, 1:] = 0.0
 
         # self.active_sh_degree = self.max_sh_degree
 
@@ -214,7 +219,7 @@ class GaussianModel:
         opacities = inverse_sigmoid(0.1 * torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda"))
         # opacities = torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda")
 
-        self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(True))
+        self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(False))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
         self._scaling = nn.Parameter(scales.requires_grad_(True))

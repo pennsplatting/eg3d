@@ -32,6 +32,11 @@ import numpy as np
 from plyfile import PlyData
 import math
 
+# FIXME: replace with gt texture for debug
+import sys
+sys.path.append('/home/zxy/eg3d/eg3d/data')
+from gt.get_uv_texture import get_uv_texture
+
 @persistence.persistent_class
 class TriPlaneGenerator(torch.nn.Module):
     def __init__(self,
@@ -64,10 +69,11 @@ class TriPlaneGenerator(torch.nn.Module):
         self._last_planes = None
         
         ### TODO: -------- next3d 3d face model --------
-        # self.topology_path = '/home/1TB/model/head_template.obj' # DECA model
-        # self.verts_path = '/home/1TB/model/seed0000_head_template2_xzymean125.ply' # aligned with eg3d mesh in both scale and cam coord
-        self.topology_path = '/mnt/kostas-graid/datasets/xuyimeng/ffhq/head_template.obj' # DECA model
-        self.verts_path = 'out/ply/seed0000_head_template2_xzymean125_final.ply' # aligned with eg3d mesh in both scale and cam coord
+        self.topology_path = '/home/zxy/eg3d/eg3d/data/head_template.obj' # DECA model
+        self.verts_path = '/home/zxy/eg3d/eg3d/data/seed0000_head_template2_xzymean125.ply' # aligned with eg3d mesh in both scale and cam coord
+        # self.verts_path = '/home/zxy/eg3d/eg3d/data/gt/uv_vertices.ply' # should I change to this path?
+        # self.topology_path = '/mnt/kostas-graid/datasets/xuyimeng/ffhq/head_template.obj' # DECA model
+        # self.verts_path = 'out/ply/seed0000_head_template2_xzymean125_final.ply' # aligned with eg3d mesh in both scale and cam coord
         self.load_lms = True
         
         # set pytorch3d rasterizer
@@ -220,7 +226,10 @@ class TriPlaneGenerator(torch.nn.Module):
 
         # Reshape output into three 32-channel planes
         ## TODO: convert from triplane to 3DMM here
-        textures_gen_batch = planes
+        textures_gen_batch = planes # (4, 96, 256, 256)
+        
+        ## FIXME: replace with gt texture for debug 
+        # textures = torch.tensor(get_uv_texture(), dtype=torch.float, device="cuda") / 255 # (53215, 3)
         
         ### ----- original eg3d version -----
         # planes = planes.view(len(planes), 3, 32, planes.shape[-2], planes.shape[-1]) # torch.Size([4, 3, 32, 256, 256])
@@ -246,7 +255,7 @@ class TriPlaneGenerator(torch.nn.Module):
         # TODO: chenge 
         # R, T = look_at_view_transform(10, 0, 0)
         # world_view_transform = getWorld2View(R, T).transpose(0, 1).cuda() 
-        world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix)
+        world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix) # (4, 4, 4) 
 
         ## gaussian_splatting rendering resolution: 
         ## V1: gaussian rendering -> 64 x 64 -> sr module --> 256 x 256: self.gaussian_splatting_use_sr = True
@@ -282,7 +291,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # map textures to gaussian features 
     
             ## TODO: can gaussiam splatting run batch in parallel?
-            textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.detach().unsqueeze(1), align_corners=False)
+            textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.detach().unsqueeze(1), align_corners=False) # (1, 96, 1, 5023)
             # gaussian.create_from_generated_texture(self.verts, textures)
             self.gaussian.create_from_ply2(self.verts, textures)
 
