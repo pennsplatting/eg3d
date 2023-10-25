@@ -25,3 +25,14 @@ vids/
 stylegan3/results
 eg3d/results
 eg3d_results
+eg3d/~
+
+#data
+*.zip
+
+# slurm
+*.out
+
+#debug
+proj*
+

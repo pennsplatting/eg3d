@@ -11,7 +11,7 @@
 
 import torch
 import numpy as np
-from training.gaussian_splatting.utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
+from training.gaussian_splatting.utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation, build_covariance_from_scaling_rotation
 from torch import nn
 import os
 from training.gaussian_splatting.utils.system_utils import mkdir_p
@@ -27,11 +27,6 @@ from ipdb import set_trace as st
 class GaussianModel:
 
     def setup_functions(self):
-        def build_covariance_from_scaling_rotation(scaling, scaling_modifier, rotation):
-            L = build_scaling_rotation(scaling_modifier * scaling, rotation)
-            actual_covariance = L @ L.transpose(1, 2)
-            symm = strip_symmetric(actual_covariance)
-            return symm
         
         self.scaling_activation = torch.exp
         self.scaling_inverse_activation = torch.log
@@ -45,7 +40,8 @@ class GaussianModel:
 
 
     def __init__(self, sh_degree : int):
-        self.active_sh_degree = 0
+        # self.active_sh_degree = 0
+        self.active_sh_degree = sh_degree
         self.max_sh_degree = sh_degree  
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
@@ -132,7 +128,7 @@ class GaussianModel:
         features[:, :3, 0 ] = fused_color
         features[:, 3:, 1:] = 0.0
 
-        print("Number of points at initialisation : ", fused_point_cloud.shape[0])
+        # print("Number of points at initialisation : ", fused_point_cloud.shape[0])
 
         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
@@ -182,7 +178,7 @@ class GaussianModel:
 
         # self.active_sh_degree = self.max_sh_degree
 
-        print("Number of points at initialisation : ", xyz.shape[0])
+        # print("Number of points at initialisation : ", xyz.shape[0])
 
         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(xyz)).float().cuda()), 0.0000001)
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
@@ -208,7 +204,7 @@ class GaussianModel:
 
         # self.active_sh_degree = self.max_sh_degree
 
-        print("Number of points at initialisation : ", xyz.shape[0])
+        # print("Number of points at initialisation : ", xyz.shape[0])
 
         dist2 = torch.clamp_min(distCUDA2(xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
