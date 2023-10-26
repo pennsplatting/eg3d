@@ -70,10 +70,12 @@ class TriPlaneGenerator(torch.nn.Module):
         self._last_planes = None
         
         ### TODO: -------- next3d 3d face model --------
-        self.topology_path = '/home/zxy/eg3d/eg3d/data/head_template.obj' # DECA model
-        self.verts_path = '/home/zxy/eg3d/eg3d/data/seed0000_head_template2_xzymean125.ply' # aligned with eg3d mesh in both scale and cam coord
-        # self.topology_path = '/mnt/kostas-graid/datasets/xuyimeng/ffhq/head_template.obj' # DECA model
-        # self.verts_path = 'out/ply/seed0000_head_template2_xzymean125_final.ply' # aligned with eg3d mesh in both scale and cam coord
+        # self.topology_path = '/home/zxy/eg3d/eg3d/data/head_template.obj' # DECA model
+        # self.verts_path = '/home/zxy/eg3d/eg3d/data/seed0000_head_template2_xzymean125.ply' # aligned with eg3d mesh in both scale and cam coord
+        self.topology_path = '/mnt/kostas-graid/datasets/xuyimeng/ffhq/head_template.obj' # DECA model
+        self.verts_path = 'out/ply/seed0000_head_template2_xzymean125_final.ply' # aligned with eg3d mesh in both scale and cam coord
+        # TODO: change to 3dmm model
+        
         self.load_lms = True
         
         # set pytorch3d rasterizer
