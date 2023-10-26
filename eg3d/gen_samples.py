@@ -172,9 +172,9 @@ def generate_images(
             conditioning_params = torch.cat([conditioning_cam2world_pose.reshape(-1, 16), intrinsics.reshape(-1, 9)], 1)
 
             ws = G.mapping(z, conditioning_params, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)
-            img = G.synthesis(ws, camera_params)['image']
+            img = G.synthesis(ws, camera_params)['image'] # (1, 3, 512, 512)
 
-            img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
+            img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8) # (1, 512, 512, 3)
             imgs.append(img)
 
         img = torch.cat(imgs, dim=2)
@@ -201,7 +201,7 @@ def generate_images(
                         head += max_batch
                         pbar.update(max_batch)
 
-            sigmas = sigmas.reshape((shape_res, shape_res, shape_res)).cpu().numpy()
+            sigmas = sigmas.reshape((shape_res, shape_res, shape_res)).cpu().numpy() # (512, 512, 512)
             sigmas = np.flip(sigmas, 0)
 
             # Trim the border of the extracted cube

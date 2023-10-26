@@ -58,6 +58,7 @@ def sample_from_planes(plane_axes, plane_features, coordinates, mode='bilinear',
     _, M, _ = coordinates.shape
     plane_features = plane_features.view(N*n_planes, C, H, W)
 
+    # scale to align with 
     coordinates = (2/box_warp) * coordinates # TODO(by eg3d authors): add specific box bounds
 
     projected_coordinates = project_onto_planes(plane_axes, coordinates).unsqueeze(1)

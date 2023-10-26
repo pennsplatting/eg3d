@@ -83,8 +83,8 @@ class TriPlaneGenerator(torch.nn.Module):
 
         # Reshape into 'raw' neural-rendered image
         H = W = self.neural_rendering_resolution
-        feature_image = feature_samples.permute(0, 2, 1).reshape(N, feature_samples.shape[-1], H, W).contiguous()
-        depth_image = depth_samples.permute(0, 2, 1).reshape(N, 1, H, W)
+        feature_image = feature_samples.permute(0, 2, 1).reshape(N, feature_samples.shape[-1], H, W).contiguous() # (4, 32, 64, 64)
+        depth_image = depth_samples.permute(0, 2, 1).reshape(N, 1, H, W) # (4, 1, 64, 64)
 
         # Run superresolution to get final image
         rgb_image = feature_image[:, :3]
@@ -136,6 +136,6 @@ class OSGDecoder(torch.nn.Module):
 
         x = self.net(x)
         x = x.view(N, M, -1)
-        rgb = torch.sigmoid(x[..., 1:])*(1 + 2*0.001) - 0.001 # Uses sigmoid clamping from MipNeRF
+        rgb = torch.sigmoid(x[..., 1:])*(1 + 2*0.001) - 0.001 # Uses sigmoid clamping from MipNeRF (4, 48*64*64, 32)
         sigma = x[..., 0:1]
         return {'rgb': rgb, 'sigma': sigma}
