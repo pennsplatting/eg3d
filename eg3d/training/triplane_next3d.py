@@ -30,7 +30,12 @@ from training.gaussian_splatting.utils.graphics_utils import getWorld2View, getP
 import numpy as np
 
 from plyfile import PlyData
-import math
+import scipy.io as sio
+
+# FIXME: replace with gt texture for debug
+# import sys
+# sys.path.append('/home/zxy/eg3d/eg3d/data')
+# from gt.get_uv_texture import get_uv_texture
 
 @persistence.persistent_class
 class TriPlaneGenerator(torch.nn.Module):
@@ -57,52 +62,18 @@ class TriPlaneGenerator(torch.nn.Module):
         self.ray_sampler = RaySampler()
         self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=256, img_channels=32*3, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
         self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
-        self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
+        # self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
+        self.decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
         self.neural_rendering_resolution = 64
         self.rendering_kwargs = rendering_kwargs
         
         self._last_planes = None
         
-        ### TODO: -------- next3d 3d face model --------
-        # self.topology_path = '/home/1TB/model/head_template.obj' # DECA model
-        # self.verts_path = '/home/1TB/model/seed0000_head_template2_xzymean125.ply' # aligned with eg3d mesh in both scale and cam coord
-        self.topology_path = '/mnt/kostas-graid/datasets/xuyimeng/ffhq/head_template.obj' # DECA model
-        self.verts_path = 'out/ply/seed0000_head_template2_xzymean125_final.ply' # aligned with eg3d mesh in both scale and cam coord
-        self.load_lms = True
-        
-        # set pytorch3d rasterizer
+        ### TODO: -------- 3dmm face model --------
         self.uv_resolution = 256
-        # self.rasterizer = Pytorch3dRasterizer(image_size=256)
         
-        _, faces, aux = load_obj(self.topology_path)
-        verts = self.load_aligend_verts(self.verts_path)
-        
-        uvcoords = aux.verts_uvs[None, ...]      # (N, V, 2)
-        uvfaces = faces.textures_idx[None, ...] # (N, F, 3)
-        faces = faces.verts_idx[None,...]
-
-        # faces
-        dense_triangles = generate_triangles(self.uv_resolution, self.uv_resolution)
-        self.register_buffer('dense_faces', torch.from_numpy(dense_triangles).long()[None,:,:].contiguous())
-        self.register_buffer('faces', faces)
-        self.register_buffer('raw_uvcoords', uvcoords[:,:verts.shape[0]]) #[bz, ntv, 2]
-        
-        # uv coords
-        uvcoords = torch.cat([uvcoords, uvcoords[:,:,0:1]*0.+1.], -1) #[bz, ntv, 3] 
-        #TODO: The above concat all 1s to the original uv_coods (self.raw_uvcoords). Why?
-        uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1]
-        face_uvcoords = face_vertices(uvcoords, uvfaces)
-        # TODO: FIXME change to a version where the uvcoords have the same number as verts
-        self.register_buffer('uvcoords', uvcoords)
-        # self.register_buffer('uvcoords', uvcoords[:,:verts.shape[0]])
-        # st()
-        self.register_buffer('uvfaces', uvfaces) #(N, F, 3)
-        self.register_buffer('face_uvcoords', face_uvcoords) # (N, F, 3, 3)
-
-        # self.orth_scale = torch.tensor([[5.0]])
-        # self.orth_shift = torch.tensor([[0, -0.01, -0.01]])
-        self.register_buffer('verts', verts)
-        ### -------- next3d 3d face model [end] --------
+        self.load_face_model()
+        ### -------- 3dmm face model [end] --------
 
         
         ### -------- gaussian splatting render --------
@@ -111,10 +82,42 @@ class TriPlaneGenerator(torch.nn.Module):
         self.gaussian = None
         self.viewpoint_camera = None
         
+    
+    def process_uv(self, uv_coords, uv_h = 256, uv_w = 256):
+        uv_coords[:,0] = uv_coords[:,0]*(uv_w - 1)
+        uv_coords[:,1] = uv_coords[:,1]*(uv_h - 1)
+        uv_coords[:,1] = uv_h - uv_coords[:,1] - 1
+        uv_coords = np.stack((uv_coords))
+        return uv_coords
+    
+    def load_face_model(self):
+        verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
+        
+        plydata = PlyData.read(verts_path)
+        verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+        # normalize to [-0.5, 0.5] and place the center at origin
+        verts_norm = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+        verts_norm = torch.tensor(verts_norm, dtype=torch.float, device='cuda')
+        self.register_buffer('verts', verts_norm)
+        
+        verts_rgb = np.stack([plydata['vertex'][ax] for ax in ['red', 'green', 'blue']], axis=-1) # [V,3], 0~255
+        self.register_buffer('verts_rgb', torch.tensor(verts_rgb, dtype=torch.float, device='cuda'))
+        
+        # load uv coords & gt uv map
+        uv_h, uv_w = self.uv_resolution, self.uv_resolution
+        uv_coord_path = '../dataset_preprocessing/3dmm/BFM_UV.mat'
+        C = sio.loadmat(uv_coord_path)
+        uv_coords = C['UV'].copy(order = 'C') #(53215, 2) = [V, 2]
+        uv_coords_processed = self.process_uv(uv_coords, uv_h, uv_w) #(53215, 2)
+        # uv_coords_processed = uv_coords_processed.astype(np.int32)
+        self.register_buffer('raw_uvcoords', torch.tensor(uv_coords_processed[None], dtype=torch.float, device='cuda')) #[B, V, 2]
+        
+            
     def load_aligend_verts(self, ply_path):
         plydata = PlyData.read(ply_path)
-        v_np = np.array(plydata['vertex'].data.tolist())
-        return torch.tensor(v_np)
+        # normalize to [-0.5, 0.5] and place the center at origin
+        v_np = np.array(plydata['vertex'].data.tolist()) / 512.0 - self.rendering_kwargs['box_warp'] / 2
+        return torch.tensor(v_np, dtype=torch.float, device='cuda')
         
     def mapping(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
         if self.rendering_kwargs['c_gen_conditioning_zero']:
@@ -219,8 +222,12 @@ class TriPlaneGenerator(torch.nn.Module):
             self._last_planes = planes
 
         # Reshape output into three 32-channel planes
-        ## TODO: convert from triplane to 3DMM here
-        textures_gen_batch = planes
+        ## TODO: convert from triplane to 3DMM here, maybe need a net to decode the feature to RGB or SH
+        # textures_gen_batch = planes # (4, 96, 256, 256)
+        textures_gen_batch = self.decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256)
+        
+        ## FIXME: replace with gt texture for debug 
+        # textures = torch.tensor(get_uv_texture(), dtype=torch.float, device="cuda") # (53215, 3)
         
         ### ----- original eg3d version -----
         # planes = planes.view(len(planes), 3, 32, planes.shape[-2], planes.shape[-1]) # torch.Size([4, 3, 32, 256, 256])
@@ -246,7 +253,7 @@ class TriPlaneGenerator(torch.nn.Module):
         # TODO: chenge 
         # R, T = look_at_view_transform(10, 0, 0)
         # world_view_transform = getWorld2View(R, T).transpose(0, 1).cuda() 
-        world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix)
+        world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix) # (4, 4, 4) 
 
         ## gaussian_splatting rendering resolution: 
         ## V1: gaussian rendering -> 64 x 64 -> sr module --> 256 x 256: self.gaussian_splatting_use_sr = True
@@ -263,14 +270,14 @@ class TriPlaneGenerator(torch.nn.Module):
         
         # TODO: modify z-near and z-far in projection matrix
         # projection_matrix = getProjectionMatrix(0.01, 50, fovx, fovy).transpose(0, 1)
-        z_near, z_far = 10, 500
+        z_near, z_far = 0.0000001, 10 # TODO: find suitable value for this
         # st()
         # projection_matrix = getProjectionMatrix(z_near, z_far, fovx, fovy).transpose(0, 1).to(world_view_transform_batch.device)
         rgb_image_batch = []
         
         # initialize camera and gaussians
         self.viewpoint_camera = MiniCam(c, image_size, image_size, z_near, z_far, world_view_transform_batch.device)
-        self.gaussian = GaussianModel(self.sh_degree)
+        self.gaussian = GaussianModel(self.sh_degree, self.verts)
         
         for world_view_transform, textures_gen in zip(world_view_transform_batch,textures_gen_batch):
             # full_proj_transform = world_view_transform @ projection_matrix
@@ -282,9 +289,9 @@ class TriPlaneGenerator(torch.nn.Module):
             # map textures to gaussian features 
     
             ## TODO: can gaussiam splatting run batch in parallel?
-            textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.detach().unsqueeze(1), align_corners=False)
+            textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.detach().unsqueeze(1), align_corners=False) # (1, 96, 1, 5023)
             # gaussian.create_from_generated_texture(self.verts, textures)
-            self.gaussian.create_from_ply2(self.verts, textures)
+            self.gaussian.create_from_ply2(textures)
 
             # raterization
             white_background = False
@@ -364,3 +371,27 @@ class OSGDecoder(torch.nn.Module):
         rgb = torch.sigmoid(x[..., 1:])*(1 + 2*0.001) - 0.001 # Uses sigmoid clamping from MipNeRF
         sigma = x[..., 0:1]
         return {'rgb': rgb, 'sigma': sigma}
+
+class TextureDecoder(torch.nn.Module):
+    def __init__(self, n_features, options):
+        super().__init__()
+        self.hidden_dim = 64
+
+        self.net = torch.nn.Sequential(
+            FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
+            torch.nn.Softplus(),
+            FullyConnectedLayer(self.hidden_dim, options['decoder_output_dim'], lr_multiplier=options['decoder_lr_mul'])
+        )
+        
+    def forward(self, sampled_features):
+        # features (4, 96, 256, 256) -> (4, 16*3, 256, 256)
+        # Aggregate features
+        sampled_features = sampled_features.permute(0,2,3,1)
+        x = sampled_features
+
+        N, H, W, C = x.shape
+        x = x.reshape(N*H*W, C)
+
+        x = self.net(x)
+        x = x.reshape(N, H, W, -1)
+        return x.permute(0, 3, 1, 2)

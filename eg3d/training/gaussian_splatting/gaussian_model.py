@@ -39,11 +39,11 @@ class GaussianModel:
         self.rotation_activation = torch.nn.functional.normalize
 
 
-    def __init__(self, sh_degree : int):
+    def __init__(self, sh_degree : int, verts):
         # self.active_sh_degree = 0
         self.active_sh_degree = sh_degree
         self.max_sh_degree = sh_degree  
-        self._xyz = torch.empty(0)
+        self._xyz = verts
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
         self._scaling = torch.empty(0)
@@ -197,24 +197,26 @@ class GaussianModel:
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
     
     # for test
-    def create_from_ply2(self, xyz, feature_uv):
-
-        N, C, _ , V = feature_uv.shape
-        features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 32] [V, 3, C']
+    def create_from_ply2(self, feature_uv):
+        N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
+        features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
+        # features = torch.zeros((xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        # features[:, :3, 0 ] = RGB2SH(feature_uv) # (53215, 3)
+        # features[:, 3:, 1:] = 0.0
 
         # self.active_sh_degree = self.max_sh_degree
 
         # print("Number of points at initialisation : ", xyz.shape[0])
 
-        dist2 = torch.clamp_min(distCUDA2(xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
+        dist2 = torch.clamp_min(distCUDA2(self._xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
-        rots = torch.zeros((xyz.shape[0], 4), device="cuda")
+        rots = torch.zeros((self._xyz.shape[0], 4), device="cuda")
         rots[:, 0] = 1
 
-        opacities = inverse_sigmoid(0.1 * torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda"))
+        opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
         # opacities = torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda")
 
-        self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(True))
+        # self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(False))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
         self._scaling = nn.Parameter(scales.requires_grad_(True))
