@@ -87,7 +87,7 @@ class TriPlaneGenerator(torch.nn.Module):
         uv_coords[:,0] = uv_coords[:,0]*(uv_w - 1)
         uv_coords[:,1] = uv_coords[:,1]*(uv_h - 1)
         uv_coords[:,1] = uv_h - uv_coords[:,1] - 1
-        uv_coords = np.hstack((uv_coords, np.zeros((uv_coords.shape[0], 1)))) # add z
+        uv_coords = np.stack((uv_coords))
         return uv_coords
     
     def load_face_model(self):
@@ -107,10 +107,10 @@ class TriPlaneGenerator(torch.nn.Module):
         uv_h, uv_w = self.uv_resolution, self.uv_resolution
         uv_coord_path = '../dataset_preprocessing/3dmm/BFM_UV.mat'
         C = sio.loadmat(uv_coord_path)
-        uv_coords = C['UV'].copy(order = 'C') #(53215, 2)
-        uv_coords_processed = self.process_uv(uv_coords, uv_h, uv_w)
-        uv_coords_processed = uv_coords_processed.astype(np.int32)
-        self.register_buffer('raw_uvcoords', torch.tensor(uv_coords_processed, dtype=torch.int32, device='cuda')) #[bz, ntv, 2]
+        uv_coords = C['UV'].copy(order = 'C') #(53215, 2) = [V, 2]
+        uv_coords_processed = self.process_uv(uv_coords, uv_h, uv_w) #(53215, 2)
+        # uv_coords_processed = uv_coords_processed.astype(np.int32)
+        self.register_buffer('raw_uvcoords', torch.tensor(uv_coords_processed[None], dtype=torch.float, device='cuda')) #[B, V, 2]
         
             
     def load_aligend_verts(self, ply_path):
