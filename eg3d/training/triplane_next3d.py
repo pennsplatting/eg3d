@@ -30,7 +30,7 @@ from training.gaussian_splatting.utils.graphics_utils import getWorld2View, getP
 import numpy as np
 
 from plyfile import PlyData
-import math
+import scipy.io as sio
 
 # FIXME: replace with gt texture for debug
 # import sys
@@ -69,46 +69,11 @@ class TriPlaneGenerator(torch.nn.Module):
         
         self._last_planes = None
         
-        ### TODO: -------- next3d 3d face model --------
-        self.topology_path = '/home/zxy/eg3d/eg3d/data/head_template.obj' # DECA model
-        self.verts_path = '/home/zxy/eg3d/eg3d/data/seed0000_head_template2_xzymean125.ply' # aligned with eg3d mesh in both scale and cam coord
-        # self.topology_path = '/mnt/kostas-graid/datasets/xuyimeng/ffhq/head_template.obj' # DECA model
-        # self.verts_path = 'out/ply/seed0000_head_template2_xzymean125_final.ply' # aligned with eg3d mesh in both scale and cam coord
-        self.load_lms = True
-        
-        # set pytorch3d rasterizer
+        ### TODO: -------- 3dmm face model --------
         self.uv_resolution = 256
-        # self.rasterizer = Pytorch3dRasterizer(image_size=256)
         
-        _, faces, aux = load_obj(self.topology_path)
-        verts = self.load_aligend_verts(self.verts_path)
-        
-        uvcoords = aux.verts_uvs[None, ...]      # (N, V, 2)
-        uvfaces = faces.textures_idx[None, ...] # (N, F, 3)
-        faces = faces.verts_idx[None,...]
-
-        # faces
-        dense_triangles = generate_triangles(self.uv_resolution, self.uv_resolution)
-        self.register_buffer('dense_faces', torch.from_numpy(dense_triangles).long()[None,:,:].contiguous())
-        self.register_buffer('faces', faces)
-        self.register_buffer('raw_uvcoords', uvcoords[:,:verts.shape[0]]) #[bz, ntv, 2]
-        
-        # uv coords
-        uvcoords = torch.cat([uvcoords, uvcoords[:,:,0:1]*0.+1.], -1) #[bz, ntv, 3] 
-        #TODO: The above concat all 1s to the original uv_coods (self.raw_uvcoords). Why?
-        uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1]
-        face_uvcoords = face_vertices(uvcoords, uvfaces)
-        # TODO: FIXME change to a version where the uvcoords have the same number as verts
-        self.register_buffer('uvcoords', uvcoords)
-        # self.register_buffer('uvcoords', uvcoords[:,:verts.shape[0]])
-        # st()
-        self.register_buffer('uvfaces', uvfaces) #(N, F, 3)
-        self.register_buffer('face_uvcoords', face_uvcoords) # (N, F, 3, 3)
-
-        # self.orth_scale = torch.tensor([[5.0]])
-        # self.orth_shift = torch.tensor([[0, -0.01, -0.01]])
-        self.register_buffer('verts', verts)
-        ### -------- next3d 3d face model [end] --------
+        self.load_face_model()
+        ### -------- 3dmm face model [end] --------
 
         
         ### -------- gaussian splatting render --------
@@ -117,6 +82,37 @@ class TriPlaneGenerator(torch.nn.Module):
         self.gaussian = None
         self.viewpoint_camera = None
         
+    
+    def process_uv(self, uv_coords, uv_h = 256, uv_w = 256):
+        uv_coords[:,0] = uv_coords[:,0]*(uv_w - 1)
+        uv_coords[:,1] = uv_coords[:,1]*(uv_h - 1)
+        uv_coords[:,1] = uv_h - uv_coords[:,1] - 1
+        uv_coords = np.stack((uv_coords))
+        return uv_coords
+    
+    def load_face_model(self):
+        verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
+        
+        plydata = PlyData.read(verts_path)
+        verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+        # normalize to [-0.5, 0.5] and place the center at origin
+        verts_norm = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+        verts_norm = torch.tensor(verts_norm, dtype=torch.float, device='cuda')
+        self.register_buffer('verts', verts_norm)
+        
+        verts_rgb = np.stack([plydata['vertex'][ax] for ax in ['red', 'green', 'blue']], axis=-1) # [V,3], 0~255
+        self.register_buffer('verts_rgb', torch.tensor(verts_rgb, dtype=torch.float, device='cuda'))
+        
+        # load uv coords & gt uv map
+        uv_h, uv_w = self.uv_resolution, self.uv_resolution
+        uv_coord_path = '../dataset_preprocessing/3dmm/BFM_UV.mat'
+        C = sio.loadmat(uv_coord_path)
+        uv_coords = C['UV'].copy(order = 'C') #(53215, 2) = [V, 2]
+        uv_coords_processed = self.process_uv(uv_coords, uv_h, uv_w) #(53215, 2)
+        # uv_coords_processed = uv_coords_processed.astype(np.int32)
+        self.register_buffer('raw_uvcoords', torch.tensor(uv_coords_processed[None], dtype=torch.float, device='cuda')) #[B, V, 2]
+        
+            
     def load_aligend_verts(self, ply_path):
         plydata = PlyData.read(ply_path)
         # normalize to [-0.5, 0.5] and place the center at origin
