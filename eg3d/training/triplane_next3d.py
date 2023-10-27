@@ -228,7 +228,7 @@ class TriPlaneGenerator(torch.nn.Module):
         # Reshape output into three 32-channel planes
         ## TODO: convert from triplane to 3DMM here, maybe need a net to decode the feature to RGB or SH
         # textures_gen_batch = planes # (4, 96, 256, 256)
-        textures_gen_batch = self.decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256)
+        textures_gen_batch = self.decoder(planes) # (4, 96, 256, 256) -> (4, 3*16, 256, 256)
         
         ## FIXME: replace with gt texture for debug 
         # textures = torch.tensor(get_uv_texture(), dtype=torch.float, device="cuda") # (53215, 3)
@@ -298,7 +298,8 @@ class TriPlaneGenerator(torch.nn.Module):
             self.gaussian.create_from_ply2(textures)
 
             # raterization
-            white_background = False
+            # TODO: change bg_color, may also be generated?
+            white_background = True
             bg_color = [1,1,1] if white_background else [0, 0, 0]
             background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
             
