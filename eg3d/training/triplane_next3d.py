@@ -187,6 +187,7 @@ class TriPlaneGenerator(torch.nn.Module):
         # cv2.destroyAllWindows() 
     
     def getWorld2View_from_eg3d_c(self, c2w):
+        c2w[:3, 1:3] *= -1 # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
         # transpose the R in c2w
         if not torch.all(c2w==0):
             w2c = torch.linalg.inv(c2w)
