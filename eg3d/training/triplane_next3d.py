@@ -91,7 +91,9 @@ class TriPlaneGenerator(torch.nn.Module):
         return uv_coords
     
     def load_face_model(self):
-        verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
+        # verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
+        ## align with the actual training space of 3dmm, rather than the saved ply space
+        verts_path = '../dataset_preprocessing/3dmm/gs_flipped_uv_textured_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
         
         plydata = PlyData.read(verts_path)
         verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
