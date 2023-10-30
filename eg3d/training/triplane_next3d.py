@@ -91,8 +91,9 @@ class TriPlaneGenerator(torch.nn.Module):
         return uv_coords
     
     def load_face_model(self):
-        verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
-        
+        # verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
+        verts_path = 'dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
+                
         plydata = PlyData.read(verts_path)
         verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
         # normalize to [-0.5, 0.5] and place the center at origin
@@ -100,12 +101,13 @@ class TriPlaneGenerator(torch.nn.Module):
         verts_norm = torch.tensor(verts_norm, dtype=torch.float, device='cuda')
         self.register_buffer('verts', verts_norm)
         
-        verts_rgb = np.stack([plydata['vertex'][ax] for ax in ['red', 'green', 'blue']], axis=-1) # [V,3], 0~255
+        verts_rgb = np.stack([plydata['vertex'][ax] / 255.0 for ax in ['red', 'green', 'blue']], axis=-1) # [V,3], 0~255 -> 0~1
         self.register_buffer('verts_rgb', torch.tensor(verts_rgb, dtype=torch.float, device='cuda'))
         
         # load uv coords & gt uv map
         uv_h, uv_w = self.uv_resolution, self.uv_resolution
-        uv_coord_path = '../dataset_preprocessing/3dmm/BFM_UV.mat'
+        # uv_coord_path = '../dataset_preprocessing/3dmm/BFM_UV.mat'
+        uv_coord_path = 'dataset_preprocessing/3dmm/BFM_UV.mat'
         C = sio.loadmat(uv_coord_path)
         uv_coords = C['UV'].copy(order = 'C') #(53215, 2) = [V, 2]
         uv_coords_processed = self.process_uv(uv_coords, uv_h, uv_w) #(53215, 2)
@@ -279,6 +281,11 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(c, image_size, image_size, z_near, z_far, world_view_transform_batch.device)
         self.gaussian = GaussianModel(self.sh_degree, self.verts)
         
+        # TODO: change bg_color, may also be generated?
+        white_background = True
+        bg_color = [1,1,1] if white_background else [0, 0, 0]
+        # bg_color = np.random.rand(3)
+        
         for world_view_transform, textures_gen in zip(world_view_transform_batch,textures_gen_batch):
             # full_proj_transform = world_view_transform @ projection_matrix
             self.viewpoint_camera.update_transforms(world_view_transform)
@@ -289,14 +296,16 @@ class TriPlaneGenerator(torch.nn.Module):
             # map textures to gaussian features 
     
             ## TODO: can gaussiam splatting run batch in parallel?
-            textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.detach().unsqueeze(1), align_corners=False) # (1, 96, 1, 5023)
+            textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.detach().unsqueeze(1), align_corners=False) # (1, 48, 1, V)
             # gaussian.create_from_generated_texture(self.verts, textures)
-            self.gaussian.create_from_ply2(textures)
+            # self.gaussian.create_from_ply2(textures)
+            self.gaussian.create_from_ply2(self.verts_rgb)
 
             # raterization
             # TODO: change bg_color, may also be generated?
-            white_background = True
-            bg_color = [1,1,1] if white_background else [0, 0, 0]
+            # white_background = False
+            # bg_color = [1,1,1] if white_background else [0, 0, 0]
+            # bg_color = np.random.rand(3)
             background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
             
             _rgb_image = gs_render(self.viewpoint_camera, self.gaussian, None, background)["render"]
@@ -373,6 +382,7 @@ class OSGDecoder(torch.nn.Module):
         sigma = x[..., 0:1]
         return {'rgb': rgb, 'sigma': sigma}
 
+# decode features to SH
 class TextureDecoder(torch.nn.Module):
     def __init__(self, n_features, options):
         super().__init__()

@@ -198,11 +198,11 @@ class GaussianModel:
     
     # for test
     def create_from_ply2(self, feature_uv):
-        N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
-        features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
-        # features = torch.zeros((xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
-        # features[:, :3, 0 ] = RGB2SH(feature_uv) # (53215, 3)
-        # features[:, 3:, 1:] = 0.0
+        # N, C, _ , V = feature_uv.shape # (1, 48, 1, V)
+        # features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
+        features = torch.zeros((feature_uv.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda() # [V, 3, 16]
+        features[:, :3, 0 ] = RGB2SH(feature_uv) # (53215, 3)
+        features[:, 3:, 1:] = 0.0
 
         # self.active_sh_degree = self.max_sh_degree
 

@@ -77,6 +77,7 @@ class MiniCam:
         
         intrinsics = c[:, 16:25].view(-1, 3, 3)
         focal = intrinsics[0,0,1] * self.image_width # check
+        # focal = intrinsics[0,0,0] * self.image_width # check
         fov = 2*torch.arctan(self.image_width/2/focal)*180./math.pi
         self.FoVx = self.FoVy = fov
         self.projection_matrix = getProjectionMatrix(self.znear, self.zfar, fov, fov).transpose(0, 1).to(device)
