@@ -60,6 +60,7 @@ class Camera(nn.Module):
 
 class MiniCam:
     def __init__(self, c, width, height, znear, zfar, device):
+        # c2w (pose) should be in NeRF convention.
         self.image_width = width
         self.image_height = height    
         # self.FoVy = fovy

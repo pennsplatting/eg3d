@@ -189,12 +189,17 @@ class TriPlaneGenerator(torch.nn.Module):
         # cv2.destroyAllWindows() 
     
     def getWorld2View_from_eg3d_c(self, c2w):
-        c2w[:3, 1:3] *= -1 # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+        # c2w[:3, 1:3] *= -1 # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+        c2w[:, :3, 1:3] *= -1
+        c2w[:, :3, 2] *= -1 # chaneg camera axes
         # transpose the R in c2w
         if not torch.all(c2w==0):
             w2c = torch.linalg.inv(c2w)
         else:
             w2c = torch.zeros_like(c2w)
+        
+        # w2c[:, 1:3, :3] *= -1
+        # w2c[:, :3, 3] *= -1
         
         batch_R = w2c[:,:3,:3]
         batch_R_trans = batch_R.transpose(1,2).contiguous()
@@ -204,7 +209,13 @@ class TriPlaneGenerator(torch.nn.Module):
 
             
     def synthesis(self, ws, c, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):
-        cam2world_matrix = c[:, :16].view(-1, 4, 4)
+        # cam2world_matrix = c[:, :16].view(-1, 4, 4)
+        # TODO: camera
+        cam2world_matrix = torch.tensor([[-0.015,0.003,-1,-1],
+                                         [-0.088,1,0.004,-0.5],
+                                         [0.995,0.088,-0.01521,-0.5],
+                                         [0,0,0,1]], dtype=torch.float, device='cuda')
+        cam2world_matrix = cam2world_matrix.view(1, 4, 4).repeat(4,1,1)
         # intrinsics = c[:, 16:25].view(-1, 3, 3)
         
         if neural_rendering_resolution is None:
