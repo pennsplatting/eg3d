@@ -83,12 +83,16 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = None
         
     
-    def process_uv(self, uv_coords, uv_h = 256, uv_w = 256):
+    def process_uv_with_res(self, uv_coords, uv_h = 256, uv_w = 256):
+    # discard this method: this will map uv coord values to [0,res], while grid sample takes uv in [-1,1]
         uv_coords[:,0] = uv_coords[:,0]*(uv_w - 1)
         uv_coords[:,1] = uv_coords[:,1]*(uv_h - 1)
         uv_coords[:,1] = uv_h - uv_coords[:,1] - 1
         uv_coords = np.stack((uv_coords))
         return uv_coords
+    
+    def process_uv(self, uv_coords, uv_h = 256, uv_w = 256):
+        return uv_coords*2-1.0
     
     def load_face_model(self):
         # verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
@@ -110,6 +114,7 @@ class TriPlaneGenerator(torch.nn.Module):
         uv_coord_path = '../dataset_preprocessing/3dmm/BFM_UV.mat'
         C = sio.loadmat(uv_coord_path)
         uv_coords = C['UV'].copy(order = 'C') #(53215, 2) = [V, 2]
+    
         uv_coords_processed = self.process_uv(uv_coords, uv_h, uv_w) #(53215, 2)
         # uv_coords_processed = uv_coords_processed.astype(np.int32)
         self.register_buffer('raw_uvcoords', torch.tensor(uv_coords_processed[None], dtype=torch.float, device='cuda')) #[B, V, 2]
@@ -228,6 +233,8 @@ class TriPlaneGenerator(torch.nn.Module):
         ## TODO: convert from triplane to 3DMM here, maybe need a net to decode the feature to RGB or SH
         # textures_gen_batch = planes # (4, 96, 256, 256)
         textures_gen_batch = self.decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256)
+        # FIXME: debug uv sample problem
+        # textures_gen_batch = 99 * torch.ones_like(textures_gen_batch).to(planes.device) #(4, SH, 256, 256)
         
         ## FIXME: replace with gt texture for debug 
         # textures = torch.tensor(get_uv_texture(), dtype=torch.float, device="cuda") # (53215, 3)
@@ -295,7 +302,6 @@ class TriPlaneGenerator(torch.nn.Module):
             textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.detach().unsqueeze(1), align_corners=False) # (1, 96, 1, 5023)
             # gaussian.create_from_generated_texture(self.verts, textures)
             self.gaussian.create_from_ply2(textures)
-
             # raterization
             white_background = False
             bg_color = [1,1,1] if white_background else [0, 0, 0]
