@@ -16,7 +16,7 @@ from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import upfirdn2d
 from training.dual_discriminator import filtered_resizing
-
+from ipdb import set_trace as st
 #----------------------------------------------------------------------------
 
 class Loss:
@@ -126,6 +126,13 @@ class StyleGAN2Loss(Loss):
                 training_stats.report('Loss/G/loss', loss_Gmain)
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 loss_Gmain.mean().mul(gain).backward()
+            # my fake code
+            for name, p in self.D.named_parameters():
+                if p.requires_grad:
+                    print(name, p.grad)
+            st()
+
+                
 
         # Density Regularization
         if phase in ['Greg', 'Gboth'] and self.G.rendering_kwargs.get('density_reg', 0) > 0 and self.G.rendering_kwargs['reg_type'] == 'l1':
