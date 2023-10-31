@@ -37,6 +37,16 @@ import scipy.io as sio
 # sys.path.append('/home/zxy/eg3d/eg3d/data')
 # from gt.get_uv_texture import get_uv_texture
 
+
+def print_grad(name, grad):
+    print(f"{name}:\n")
+    if torch.all(grad==0):
+        print("grad all 0s")
+        return 
+    # print(grad)
+    print(grad.max(), grad.min(), grad.mean())
+    # st()
+    
 @persistence.persistent_class
 class TriPlaneGenerator(torch.nn.Module):
     def __init__(self,
@@ -206,7 +216,9 @@ class TriPlaneGenerator(torch.nn.Module):
         w2c[:,:3,:3] = batch_R_trans
         return w2c
         # return w2c.contiguous() ## if the above have bug, try to make it contiguous
-
+    
+    
+    
             
     def synthesis(self, ws, c, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):
         cam2world_matrix = c[:, :16].view(-1, 4, 4)
@@ -232,9 +244,8 @@ class TriPlaneGenerator(torch.nn.Module):
         # Reshape output into three 32-channel planes
         ## TODO: convert from triplane to 3DMM here, maybe need a net to decode the feature to RGB or SH
         # textures_gen_batch = planes # (4, 96, 256, 256)
-        textures_gen_batch = self.decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256)
-        # FIXME: debug uv sample problem
-        # textures_gen_batch = 99 * torch.ones_like(textures_gen_batch).to(planes.device) #(4, SH, 256, 256)
+        # textures_gen_batch = self.decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256)
+        textures_gen_batch = planes[:, :48]
         
         ## FIXME: replace with gt texture for debug 
         # textures = torch.tensor(get_uv_texture(), dtype=torch.float, device="cuda") # (53215, 3)
@@ -258,11 +269,6 @@ class TriPlaneGenerator(torch.nn.Module):
         
         ### ----- gaussian splatting -----
         # camera setting 
-        # TODO: determine the inputs
-        # width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform
-        # TODO: chenge 
-        # R, T = look_at_view_transform(10, 0, 0)
-        # world_view_transform = getWorld2View(R, T).transpose(0, 1).cuda() 
         world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix) # (4, 4, 4) 
 
         ## gaussian_splatting rendering resolution: 
@@ -281,7 +287,6 @@ class TriPlaneGenerator(torch.nn.Module):
         # TODO: modify z-near and z-far in projection matrix
         # projection_matrix = getProjectionMatrix(0.01, 50, fovx, fovy).transpose(0, 1)
         z_near, z_far = 0.0000001, 10 # TODO: find suitable value for this
-        # st()
         # projection_matrix = getProjectionMatrix(z_near, z_far, fovx, fovy).transpose(0, 1).to(world_view_transform_batch.device)
         rgb_image_batch = []
         
@@ -289,17 +294,13 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(c, image_size, image_size, z_near, z_far, world_view_transform_batch.device)
         self.gaussian = GaussianModel(self.sh_degree, self.verts)
         
+        
         for world_view_transform, textures_gen in zip(world_view_transform_batch,textures_gen_batch):
             # full_proj_transform = world_view_transform @ projection_matrix
             self.viewpoint_camera.update_transforms(world_view_transform)
 
-            # create a guassian model using generated texture
-            # TODO: change the input feature channel
-            # gaussian = GaussianModel(sh_degree=3)
-            # map textures to gaussian features 
-    
             ## TODO: can gaussiam splatting run batch in parallel?
-            textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.detach().unsqueeze(1), align_corners=False) # (1, 96, 1, 5023)
+            textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 96, 1, 5023)
             # gaussian.create_from_generated_texture(self.verts, textures)
             self.gaussian.create_from_ply2(textures)
             # raterization
@@ -311,6 +312,10 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image_batch.append(_rgb_image[None])
         
         rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
+        rgb_image.requires_grad_(True)
+        
+        rgb_image.register_hook(lambda grad: print_grad("rgb_image.requires_grad", grad))
+        
 
         ### ----- gaussian splatting [END] -----
                 
