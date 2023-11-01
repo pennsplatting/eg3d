@@ -24,6 +24,14 @@ from training.gaussian_splatting.utils.general_utils import strip_symmetric, bui
 
 from ipdb import set_trace as st
 
+def print_grad(name, grad):
+    print(f"{name}:")
+    if torch.all(grad==0):
+        print("grad all 0s")
+        return 
+    # print(grad)
+    print('\t',grad.max(), grad.min(), grad.mean())
+    
 class GaussianModel:
 
     def setup_functions(self):
@@ -107,6 +115,11 @@ class GaussianModel:
     def get_features(self):
         features_dc = self._features_dc
         features_rest = self._features_rest
+        
+        features_dc.requires_grad_(True)
+        features_dc.register_hook(lambda grad: print_grad("---features_dc.requires_grad", grad))
+        features_rest.requires_grad_(True) ## exactly the same as the grad of inside gs_render(): shs.grad
+        features_rest.register_hook(lambda grad: print_grad("---features_rest.requires_grad", grad))
         return torch.cat((features_dc, features_rest), dim=1)
     
     @property
@@ -197,7 +210,45 @@ class GaussianModel:
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
     
     # for test
+    def update_texutures(self, feature_uv):
+        N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
+        features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
+        # features = torch.zeros((xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        # features[:, :3, 0 ] = RGB2SH(feature_uv) # (53215, 3)
+        # features[:, 3:, 1:] = 0.0
+
+        # self.active_sh_degree = self.max_sh_degree
+
+        # print("Number of points at initialisation : ", xyz.shape[0])
+
+        dist2 = torch.clamp_min(distCUDA2(self._xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
+        rots = torch.zeros((self._xyz.shape[0], 4), device="cuda")
+        rots[:, 0] = 1
+
+        opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
+        # opacities = torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda")
+
+        # self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(False))
+        self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True)
+        self._features_rest = features[:,:,1:].transpose(1, 2).contiguous()#.requires_grad_(True)
+        
+        features.requires_grad_(True)
+        features.register_hook(lambda grad: print_grad("------features.requires_grad", grad))
+        self._features_dc.requires_grad_(True)
+        self._features_dc.register_hook(lambda grad: print_grad("------self._features_dc.requires_grad", grad))
+        self._features_rest.requires_grad_(True) ## exactly the same as the grad of inside gs_render(): shs.grad
+        self._features_rest.register_hook(lambda grad: print_grad("------self._features_rest.requires_grad", grad))
+        
+        self._scaling = nn.Parameter(scales.requires_grad_(True))
+        self._rotation = nn.Parameter(rots.requires_grad_(True))
+        self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+    
+    # for test
     def create_from_ply2(self, feature_uv):
+        print("should Not in create_from_ply2")
+        exit(0)
         N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
         features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
         # features = torch.zeros((xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
@@ -219,6 +270,14 @@ class GaussianModel:
         # self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(False))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
+        
+        features.requires_grad_(True)
+        features.register_hook(lambda grad: print_grad("------features.requires_grad", grad))
+        # self._features_dc.requires_grad_(True)
+        # self._features_dc.register_hook(lambda grad: print_grad("------self._features_dc.requires_grad", grad))
+        # self._features_rest.requires_grad_(True) ## exactly the same as the grad of inside gs_render(): shs.grad
+        # self._features_rest.register_hook(lambda grad: print_grad("------self._features_rest.requires_grad", grad))
+        
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))

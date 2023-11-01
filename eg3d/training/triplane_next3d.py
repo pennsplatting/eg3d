@@ -255,7 +255,7 @@ class TriPlaneGenerator(torch.nn.Module):
         ## FIXME: replace with gt texture for debug 
         # textures = torch.tensor(get_uv_texture(), dtype=torch.float, device="cuda") # (53215, 3)
         
-        original_eg3d = True
+        original_eg3d = False
         if original_eg3d:
             ## ----- original eg3d version -----
             # Create a batch of rays for volume rendering
@@ -290,6 +290,7 @@ class TriPlaneGenerator(torch.nn.Module):
         
         
         else:
+            
             ### ----- gaussian splatting -----
             # Reshape output into three 32-channel planes
             ## TODO: convert from triplane to 3DMM here, maybe need a net to decode the feature to RGB or SH
@@ -320,8 +321,12 @@ class TriPlaneGenerator(torch.nn.Module):
 
                 ## TODO: can gaussiam splatting run batch in parallel?
                 textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 96, 1, 5023)
+                textures.requires_grad_(True) 
+                textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
+                
                 # gaussian.create_from_generated_texture(self.verts, textures)
-                self.gaussian.create_from_ply2(textures)
+                # self.gaussian.create_from_ply2(textures)
+                self.gaussian.update_texutures(textures)
                 # raterization
                 white_background = False
                 bg_color = [1,1,1] if white_background else [0, 0, 0]
@@ -329,7 +334,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 _rgb_image = gs_render(self.viewpoint_camera, self.gaussian, None, background)["render"]
                 _rgb_image.requires_grad_(True) 
-                _rgb_image.register_hook(lambda grad: print_grad("_rgb_image.requires_grad", grad))
+                _rgb_image.register_hook(lambda grad: print_grad("--_rgb_image.requires_grad", grad))
                 
                 rgb_image_batch.append(_rgb_image[None])
             

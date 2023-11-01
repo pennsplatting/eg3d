@@ -16,6 +16,15 @@ from training.gaussian_splatting.gaussian_model import GaussianModel
 from training.gaussian_splatting.utils.sh_utils import eval_sh
 from ipdb import set_trace as st
 
+
+def print_grad(name, grad):
+    print(f"{name}:")
+    if torch.all(grad==0):
+        print("grad all 0s")
+        return 
+    # print(grad)
+    print('\t',grad.max(), grad.min(), grad.mean())
+
 def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None):
     """
     Render the scene. 
@@ -93,6 +102,14 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         scales = scales,
         rotations = rotations,
         cov3D_precomp = cov3D_precomp)
+
+    debug_grad = True
+    if debug_grad:
+        shs.requires_grad_(True)
+        shs.register_hook(lambda grad: print_grad("----inside gs_render(): shs.requires_grad", grad))
+
+        rendered_image.requires_grad_(True)
+        rendered_image.register_hook(lambda grad: print_grad("----inside gs_render(): rendered_image.requires_grad", grad))
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
