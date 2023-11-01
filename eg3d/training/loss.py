@@ -153,12 +153,12 @@ class StyleGAN2Loss(Loss):
                 ## FIXME: debug grad
                 print(f"Gradients for self.G -----begin---")
                 for name, param in self.G.named_parameters():
-                    print(f" {name}")
-                    # if param.grad is not None:
-                    #     print(f"Gradients for {name} have been computed.")
-                    # else:
-                    #     pass
-                    #     # print(f"Gradients for {name} have NOT been computed!!")
+                    # print(f" {name}") # not including gaussian and minicam
+                    if param.grad is not None:
+                        print(f"Gradients for {name} have been computed.")
+                    else:
+                        pass
+                        # print(f"Gradients for {name} have NOT been computed!!")
                 print(f"Gradients for self.G -----end---")
             st()
                 

@@ -58,12 +58,13 @@ class Camera(nn.Module):
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
-class MiniCam:
-    def __init__(self, c, width, height, znear, zfar, device):
+class MiniCam(nn.Module):
+    def __init__(self, width, height, znear, zfar, device=None):
+        super().__init__()
         self.image_width = width
         self.image_height = height    
-        # self.FoVy = fovy
-        # self.FoVx = fovx
+        self.FoVy = 0
+        self.FoVx = 0
         self.znear = znear
         self.zfar = zfar
         self.world_view_transform = None
@@ -75,13 +76,15 @@ class MiniCam:
         #     view_inv = self.world_view_transform
         # self.camera_center = view_inv[3][:3]
         
-        intrinsics = c[:, 16:25].view(-1, 3, 3)
+        
+        
+    def update_transforms(self, intrinsics, world_view_transform, device=None):
+        # intrinsics = c[:, 16:25].view(-1, 3, 3)
         focal = intrinsics[0,0,1] * self.image_width # check
         fov = 2*torch.arctan(self.image_width/2/focal)*180./math.pi
         self.FoVx = self.FoVy = fov
-        self.projection_matrix = getProjectionMatrix(self.znear, self.zfar, fov, fov).transpose(0, 1).to(device)
+        self.projection_matrix = getProjectionMatrix(self.znear, self.zfar, self.FoVx, self.FoVy).transpose(0, 1).to(world_view_transform.device)
         
-    def update_transforms(self, world_view_transform):
         self.world_view_transform = world_view_transform
         self.full_proj_transform = world_view_transform @ self.projection_matrix
         if not torch.all(self.world_view_transform==0): 
