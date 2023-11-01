@@ -88,10 +88,12 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         #     sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
         #     colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
         # else:
-        shs = pc.get_features
+        shs = pc.get_features # should map to ([0,1]=0.5)/C0
     else:
         colors_precomp = override_color
 
+    # # st() #check shs range
+    # print(f"--shs: min={shs.min()}, max={shs.max()}, mean={shs.mean()}, shape={shs.shape}")
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     rendered_image, radii = rasterizer(
         means3D = means3D,
@@ -110,7 +112,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
         rendered_image.requires_grad_(True)
         rendered_image.register_hook(lambda grad: print_grad("----inside gs_render(): rendered_image.requires_grad", grad))
-
+    
+    # print(f"--rendered_image: min={rendered_image.min()}, max={rendered_image.max()}, mean={rendered_image.mean()}, shape={rendered_image.shape}")
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     return {"render": rendered_image,

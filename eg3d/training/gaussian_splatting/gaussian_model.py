@@ -213,8 +213,10 @@ class GaussianModel:
     def update_texutures(self, feature_uv):
         N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
         features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
+        # print(f"--shs: min={shs.min()}, max={shs.max()}, mean={shs.mean()}, shape={shs.shape}")
         # features = torch.zeros((xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
-        # features[:, :3, 0 ] = RGB2SH(feature_uv) # (53215, 3)
+        ## FIXME: although all features are mapped from RGB[0,1] to SH now, the original GS uses 0 for self._feature_rest
+        features = RGB2SH(features) # (53215, 3)
         # features[:, 3:, 1:] = 0.0
 
         # self.active_sh_degree = self.max_sh_degree

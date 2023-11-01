@@ -71,8 +71,8 @@ class TriPlaneGenerator(torch.nn.Module):
         self.ray_sampler = RaySampler()
         self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=256, img_channels=32*3, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
         self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
-        self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
-        # self.decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+        # self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
+        self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
         self.neural_rendering_resolution = 64
         self.rendering_kwargs = rendering_kwargs
         
@@ -295,9 +295,10 @@ class TriPlaneGenerator(torch.nn.Module):
             # Reshape output into three 32-channel planes
             ## TODO: convert from triplane to 3DMM here, maybe need a net to decode the feature to RGB or SH
             # textures_gen_batch = planes # (4, 96, 256, 256)
-            # textures_gen_batch = self.decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256)
+            textures_gen_batch = self.text_decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256), range [0,1]
+            
 
-            textures_gen_batch = planes[:, :48]
+            # textures_gen_batch = planes[:, :48]
             # textures_gen_batch.requires_grad_(True)
             # textures_gen_batch.register_hook(lambda grad: print_grad("textures_gen_batch.requires_grad", grad))
             
@@ -315,7 +316,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # projection_matrix = getProjectionMatrix(z_near, z_far, fovx, fovy).transpose(0, 1).to(world_view_transform_batch.device)
             rgb_image_batch = []
             
-            
+            # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
             for world_view_transform, textures_gen in zip(world_view_transform_batch,textures_gen_batch):
                 # full_proj_transform = world_view_transform @ projection_matrix
                 self.viewpoint_camera.update_transforms(intrinsics, world_view_transform)
@@ -334,12 +335,15 @@ class TriPlaneGenerator(torch.nn.Module):
                 background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
                 
                 _rgb_image = gs_render(self.viewpoint_camera, self.gaussian, None, background)["render"]
-                # _rgb_image.requires_grad_(True) 
-                # _rgb_image.register_hook(lambda grad: print_grad("--_rgb_image.requires_grad", grad))
+                ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
+                
                 
                 rgb_image_batch.append(_rgb_image[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
+            ## FIXME: try different normalization method to normalize rgb image to [0,1]
+            rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
+            # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")
             
             # rgb_image.requires_grad_(True)
             # rgb_image.register_hook(lambda grad: print_grad("rgb_image.requires_grad", grad))
@@ -431,7 +435,11 @@ class TextureDecoder(torch.nn.Module):
 
         N, H, W, C = x.shape
         x = x.reshape(N*H*W, C)
-
+        
         x = self.net(x)
+        
+        ## added sigmoid to make x in range 0~1
+        x = torch.sigmoid(x)*(1 + 2*0.001) - 0.001
+    
         x = x.reshape(N, H, W, -1)
         return x.permute(0, 3, 1, 2)

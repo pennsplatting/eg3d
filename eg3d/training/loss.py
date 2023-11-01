@@ -150,6 +150,7 @@ class StyleGAN2Loss(Loss):
                 training_stats.report('Loss/G/loss', loss_Gmain)
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 loss_Gmain.mean().mul(gain).backward()
+                
             #     ## FIXME: debug grad
             #     print(f"Gradients for self.G -----begin---")
             #     for name, param in self.G.named_parameters():
