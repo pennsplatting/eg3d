@@ -150,17 +150,17 @@ class StyleGAN2Loss(Loss):
                 training_stats.report('Loss/G/loss', loss_Gmain)
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 loss_Gmain.mean().mul(gain).backward()
-                ## FIXME: debug grad
-                print(f"Gradients for self.G -----begin---")
-                for name, param in self.G.named_parameters():
-                    # print(f" {name}") # not including gaussian and minicam
-                    if param.grad is not None:
-                        print(f"Gradients for {name} have been computed.")
-                    else:
-                        pass
-                        # print(f"Gradients for {name} have NOT been computed!!")
-                print(f"Gradients for self.G -----end---")
-            st()
+            #     ## FIXME: debug grad
+            #     print(f"Gradients for self.G -----begin---")
+            #     for name, param in self.G.named_parameters():
+            #         # print(f" {name}") # not including gaussian and minicam
+            #         if param.grad is not None:
+            #             print(f"Gradients for {name} have been computed.")
+            #         else:
+            #             pass
+            #             # print(f"Gradients for {name} have NOT been computed!!")
+            #     print(f"Gradients for self.G -----end---")
+            # st()
                 
 
 

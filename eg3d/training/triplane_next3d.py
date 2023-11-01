@@ -280,11 +280,11 @@ class TriPlaneGenerator(torch.nn.Module):
             st() # check feature image.shape
             sr_image = self.superresolution(rgb_image, feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
             
-            ## debug grad
-            planes.requires_grad_(True)
-            planes.register_hook(lambda grad: print_grad("planes.requires_grad", grad))
-            rgb_image.requires_grad_(True)
-            rgb_image.register_hook(lambda grad: print_grad("rgb_image.requires_grad", grad))
+            # ## debug grad
+            # planes.requires_grad_(True)
+            # planes.register_hook(lambda grad: print_grad("planes.requires_grad", grad))
+            # rgb_image.requires_grad_(True)
+            # rgb_image.register_hook(lambda grad: print_grad("rgb_image.requires_grad", grad))
             
             ### ----- original eg3d version [END] ----- 
         
@@ -296,9 +296,10 @@ class TriPlaneGenerator(torch.nn.Module):
             ## TODO: convert from triplane to 3DMM here, maybe need a net to decode the feature to RGB or SH
             # textures_gen_batch = planes # (4, 96, 256, 256)
             # textures_gen_batch = self.decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256)
+
             textures_gen_batch = planes[:, :48]
-            textures_gen_batch.requires_grad_(True)
-            textures_gen_batch.register_hook(lambda grad: print_grad("textures_gen_batch.requires_grad", grad))
+            # textures_gen_batch.requires_grad_(True)
+            # textures_gen_batch.register_hook(lambda grad: print_grad("textures_gen_batch.requires_grad", grad))
             
             # camera setting 
             world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix) # (4, 4, 4) 
@@ -321,8 +322,8 @@ class TriPlaneGenerator(torch.nn.Module):
 
                 ## TODO: can gaussiam splatting run batch in parallel?
                 textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 96, 1, 5023)
-                textures.requires_grad_(True) 
-                textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
+                # textures.requires_grad_(True) 
+                # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
                 
                 # gaussian.create_from_generated_texture(self.verts, textures)
                 # self.gaussian.create_from_ply2(textures)
@@ -333,18 +334,16 @@ class TriPlaneGenerator(torch.nn.Module):
                 background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
                 
                 _rgb_image = gs_render(self.viewpoint_camera, self.gaussian, None, background)["render"]
-                _rgb_image.requires_grad_(True) 
-                _rgb_image.register_hook(lambda grad: print_grad("--_rgb_image.requires_grad", grad))
+                # _rgb_image.requires_grad_(True) 
+                # _rgb_image.register_hook(lambda grad: print_grad("--_rgb_image.requires_grad", grad))
                 
                 rgb_image_batch.append(_rgb_image[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
-            rgb_image.requires_grad_(True)
-            rgb_image.register_hook(lambda grad: print_grad("rgb_image.requires_grad", grad))
             
-
+            # rgb_image.requires_grad_(True)
+            # rgb_image.register_hook(lambda grad: print_grad("rgb_image.requires_grad", grad))
             
-                    
             ## TODO: the below superresolution shall be kept?
             ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?
             if self.gaussian_splatting_use_sr:
@@ -352,7 +351,8 @@ class TriPlaneGenerator(torch.nn.Module):
             else:
                 sr_image = rgb_image
                 rgb_image = rgb_image[:,:,::8, ::8] # TODO: FIXME change this downsample to a smoother gaussian filtering
-                
+            
+           
             ## TODO: render depth_image. May not explicitly calculated from the face model since its the same for all.
             depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
             ### ----- gaussian splatting [END] -----

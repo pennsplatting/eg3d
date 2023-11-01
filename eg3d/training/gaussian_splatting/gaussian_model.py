@@ -116,10 +116,10 @@ class GaussianModel:
         features_dc = self._features_dc
         features_rest = self._features_rest
         
-        features_dc.requires_grad_(True)
-        features_dc.register_hook(lambda grad: print_grad("---features_dc.requires_grad", grad))
-        features_rest.requires_grad_(True) ## exactly the same as the grad of inside gs_render(): shs.grad
-        features_rest.register_hook(lambda grad: print_grad("---features_rest.requires_grad", grad))
+        # features_dc.requires_grad_(True)
+        # features_dc.register_hook(lambda grad: print_grad("---features_dc.requires_grad", grad))
+        # features_rest.requires_grad_(True) ## exactly the same as the grad of inside gs_render(): shs.grad
+        # features_rest.register_hook(lambda grad: print_grad("---features_rest.requires_grad", grad))
         return torch.cat((features_dc, features_rest), dim=1)
     
     @property
@@ -233,12 +233,12 @@ class GaussianModel:
         self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True)
         self._features_rest = features[:,:,1:].transpose(1, 2).contiguous()#.requires_grad_(True)
         
-        features.requires_grad_(True)
-        features.register_hook(lambda grad: print_grad("------features.requires_grad", grad))
-        self._features_dc.requires_grad_(True)
-        self._features_dc.register_hook(lambda grad: print_grad("------self._features_dc.requires_grad", grad))
-        self._features_rest.requires_grad_(True) ## exactly the same as the grad of inside gs_render(): shs.grad
-        self._features_rest.register_hook(lambda grad: print_grad("------self._features_rest.requires_grad", grad))
+        # features.requires_grad_(True)
+        # features.register_hook(lambda grad: print_grad("------features.requires_grad", grad))
+        # self._features_dc.requires_grad_(True)
+        # self._features_dc.register_hook(lambda grad: print_grad("------self._features_dc.requires_grad", grad))
+        # self._features_rest.requires_grad_(True) ## exactly the same as the grad of inside gs_render(): shs.grad
+        # self._features_rest.register_hook(lambda grad: print_grad("------self._features_rest.requires_grad", grad))
         
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))

@@ -103,7 +103,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         rotations = rotations,
         cov3D_precomp = cov3D_precomp)
 
-    debug_grad = True
+    debug_grad = False
     if debug_grad:
         shs.requires_grad_(True)
         shs.register_hook(lambda grad: print_grad("----inside gs_render(): shs.requires_grad", grad))
