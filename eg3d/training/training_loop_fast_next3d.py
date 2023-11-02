@@ -282,9 +282,9 @@ def training_loop(
             phase.opt.zero_grad(set_to_none=True)
             phase.module.requires_grad_(True)
             for real_img, real_c, gen_z, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c):
-                loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg)
+                # loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg)
                 # FIXME: for debug
-                # loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=real_img, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
+                loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=real_img, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
             phase.module.requires_grad_(False)
 
             # Update weights.
@@ -365,10 +365,12 @@ def training_loop(
             images = torch.cat([o['image'].cpu() for o in out]).detach().numpy()
             images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
             images_depth = -torch.cat([o['image_depth'].cpu() for o in out]).detach().numpy()
+            images_real = torch.cat([o['image_real'].cpu() for o in out]).detach().numpy()
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
             save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=[-1,1], grid_size=grid_size)
             save_image_grid(images_depth, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_depth.png'), drange=[images_depth.min(), images_depth.max()], grid_size=grid_size)
-
+            save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
+            
             #--------------------
             # # Log forward-conditioned images
 

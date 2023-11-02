@@ -100,11 +100,13 @@ class TriPlaneGenerator(torch.nn.Module):
             image_size = self.neural_rendering_resolution # chekc
         else:
             image_size = 512
-        z_near, z_far = 0.0000001, 10 # TODO: find suitable value for this
+        z_near, z_far = 0.1, 2 # TODO: find suitable value for this
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         self.gaussian = GaussianModel(self.sh_degree, self.verts)
         # setattr(self,"gaussian", GaussianModel(self.sh_degree, self.verts))
         # setattr(self,"sh_degree",sh_degree)
+        # FIXME: gt, init with verts_rgb
+        self.gaussian_debug = GaussianModel(self.sh_degree, self.verts)
         
     
     def process_uv_with_res(self, uv_coords, uv_h = 256, uv_w = 256):
@@ -120,7 +122,8 @@ class TriPlaneGenerator(torch.nn.Module):
     
     def load_face_model(self):
         # verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
-        verts_path = 'dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
+        ## align with the actual training space of 3dmm, rather than the saved ply space
+        verts_path = 'dataset_preprocessing/3dmm/gs_flipped_uv_textured_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
                 
         plydata = PlyData.read(verts_path)
         verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
@@ -238,6 +241,8 @@ class TriPlaneGenerator(torch.nn.Module):
     
             
     def synthesis(self, ws, c, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):
+        # real_img = self.gt_uv_map(c)
+        
         cam2world_matrix = c[:, :16].view(-1, 4, 4)
         intrinsics = c[:, 16:25].view(-1, 3, 3)
         
@@ -319,6 +324,10 @@ class TriPlaneGenerator(torch.nn.Module):
             # projection_matrix = getProjectionMatrix(z_near, z_far, fovx, fovy).transpose(0, 1).to(world_view_transform_batch.device)
             rgb_image_batch = []
             
+            # FIXME: for debug
+            self.gaussian_debug.update_gt_textures(self.verts_rgb)
+            real_image_batch = []
+            
             # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
             for world_view_transform, textures_gen in zip(world_view_transform_batch,textures_gen_batch):
                 # full_proj_transform = world_view_transform @ projection_matrix
@@ -342,10 +351,15 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 
                 rgb_image_batch.append(_rgb_image[None])
+                
+                _real_image = gs_render(self.viewpoint_camera, self.gaussian_debug, None, background)["render"]
+                real_image_batch.append(_real_image[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
+            real_image = torch.cat(real_image_batch)
             ## FIXME: try different normalization method to normalize rgb image to [0,1]
             rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
+            real_image = (real_image / real_image.max() - 0.5) * 2
             # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")
             
             # rgb_image.requires_grad_(True)
@@ -364,7 +378,51 @@ class TriPlaneGenerator(torch.nn.Module):
             depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
             ### ----- gaussian splatting [END] -----
 
-        return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image}
+        # return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image}
+        return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image, 'image_real': real_image}
+    
+    # FIXME: for debug, init gaussians with gt uv map as real_img
+    def gt_uv_map(self, c):
+        with torch.no_grad():
+            cam2world_matrix = c[:, :16].view(-1, 4, 4)
+            intrinsics = c[:, 16:25].view(-1, 3, 3)
+            # camera setting 
+            world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix) # (4, 4, 4) 
+            self.gaussian_debug.update_gt_textures(self.verts_rgb)
+            
+            real_image_batch = []
+            
+            for world_view_transform in world_view_transform_batch:
+
+                self.viewpoint_camera.update_transforms(intrinsics, world_view_transform)
+                
+                # raterization
+                white_background = False
+                bg_color = [1,1,1] if white_background else [0, 0, 0]
+                background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+                
+                _rgb_image = gs_render(self.viewpoint_camera, self.gaussian, None, background)["render"]
+                ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
+                
+                real_image_batch.append(_rgb_image[None])
+            
+            real_image = torch.cat(real_image_batch) # [4, 3, gs_res, gs_res]
+            ## FIXME: try different normalization method to normalize rgb image to [0,1]
+            # rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
+            # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")
+            
+            # rgb_image.requires_grad_(True)
+            # rgb_image.register_hook(lambda grad: print_grad("rgb_image.requires_grad", grad))
+            
+            ## TODO: the below superresolution shall be kept?
+            ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?
+            # if self.gaussian_splatting_use_sr:
+            #     sr_image = self.superresolution(rgb_image, textures_gen_batch, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+            # else:
+            #     sr_image = rgb_image
+            #     rgb_image = rgb_image[:,:,::8, ::8]
+        return real_image
+    
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
         # Compute RGB features, density for arbitrary 3D coordinates. Mostly used for extracting shapes. 
