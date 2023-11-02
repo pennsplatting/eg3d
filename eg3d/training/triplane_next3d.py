@@ -324,7 +324,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # projection_matrix = getProjectionMatrix(z_near, z_far, fovx, fovy).transpose(0, 1).to(world_view_transform_batch.device)
             rgb_image_batch = []
             
-            # FIXME: for debug
+            # FIXME: for debug, init gaussians with gt texture
             self.gaussian_debug.update_gt_textures(self.verts_rgb)
             real_image_batch = []
             
@@ -380,48 +380,6 @@ class TriPlaneGenerator(torch.nn.Module):
 
         # return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image}
         return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image, 'image_real': real_image}
-    
-    # FIXME: for debug, init gaussians with gt uv map as real_img
-    def gt_uv_map(self, c):
-        with torch.no_grad():
-            cam2world_matrix = c[:, :16].view(-1, 4, 4)
-            intrinsics = c[:, 16:25].view(-1, 3, 3)
-            # camera setting 
-            world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix) # (4, 4, 4) 
-            self.gaussian_debug.update_gt_textures(self.verts_rgb)
-            
-            real_image_batch = []
-            
-            for world_view_transform in world_view_transform_batch:
-
-                self.viewpoint_camera.update_transforms(intrinsics, world_view_transform)
-                
-                # raterization
-                white_background = False
-                bg_color = [1,1,1] if white_background else [0, 0, 0]
-                background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-                
-                _rgb_image = gs_render(self.viewpoint_camera, self.gaussian, None, background)["render"]
-                ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
-                
-                real_image_batch.append(_rgb_image[None])
-            
-            real_image = torch.cat(real_image_batch) # [4, 3, gs_res, gs_res]
-            ## FIXME: try different normalization method to normalize rgb image to [0,1]
-            # rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
-            # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")
-            
-            # rgb_image.requires_grad_(True)
-            # rgb_image.register_hook(lambda grad: print_grad("rgb_image.requires_grad", grad))
-            
-            ## TODO: the below superresolution shall be kept?
-            ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?
-            # if self.gaussian_splatting_use_sr:
-            #     sr_image = self.superresolution(rgb_image, textures_gen_batch, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
-            # else:
-            #     sr_image = rgb_image
-            #     rgb_image = rgb_image[:,:,::8, ::8]
-        return real_image
     
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
