@@ -17,7 +17,7 @@ from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import upfirdn2d
 from training.dual_discriminator import filtered_resizing
 
-from pdb import set_trace as st
+from ipdb import set_trace as st
 #----------------------------------------------------------------------------
 
 class Loss:
@@ -106,7 +106,7 @@ class StyleGAN2Loss(Loss):
             neural_rendering_resolution = int(np.rint(self.neural_rendering_resolution_initial * (1 - alpha) + self.neural_rendering_resolution_final * alpha))
         else:
             neural_rendering_resolution = self.neural_rendering_resolution_initial
-            
+        st()
         gen_img, _gen_ws = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
         loss = torch.nn.functional.l1_loss(real_img, gen_img)
         loss.backward()
