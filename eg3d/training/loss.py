@@ -17,6 +17,7 @@ from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import upfirdn2d
 from training.dual_discriminator import filtered_resizing
 
+from pdb import set_trace as st
 #----------------------------------------------------------------------------
 
 class Loss:
@@ -149,6 +150,20 @@ class StyleGAN2Loss(Loss):
                 training_stats.report('Loss/G/loss', loss_Gmain)
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 loss_Gmain.mean().mul(gain).backward()
+                
+            #     ## FIXME: debug grad
+            #     print(f"Gradients for self.G -----begin---")
+            #     for name, param in self.G.named_parameters():
+            #         # print(f" {name}") # not including gaussian and minicam
+            #         if param.grad is not None:
+            #             print(f"Gradients for {name} have been computed.")
+            #         else:
+            #             pass
+            #             # print(f"Gradients for {name} have NOT been computed!!")
+            #     print(f"Gradients for self.G -----end---")
+            # st()
+                
+
 
         # # Density Regularization
         # if phase in ['Greg', 'Gboth'] and self.G.rendering_kwargs.get('density_reg', 0) > 0 and self.G.rendering_kwargs['reg_type'] == 'l1':

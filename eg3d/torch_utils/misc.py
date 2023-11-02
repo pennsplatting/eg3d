@@ -15,6 +15,7 @@ import torch
 import warnings
 import dnnlib
 
+from ipdb import set_trace as st
 #----------------------------------------------------------------------------
 # Cached construction of constant tensors. Avoids CPU=>GPU copy when the
 # same constant is used multiple times.

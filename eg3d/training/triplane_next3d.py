@@ -11,8 +11,8 @@
 import torch
 from torch_utils import persistence
 from training.networks_stylegan2 import Generator as StyleGAN2Backbone
-# from training.volumetric_rendering.renderer import ImportanceRenderer
-from training.volumetric_rendering.renderer_3dmm import ImportanceRenderer ##replace with splatting renderer later
+from training.volumetric_rendering.renderer import ImportanceRenderer
+# from training.volumetric_rendering.renderer_3dmm import ImportanceRenderer ##replace with splatting renderer later
 from training.volumetric_rendering.renderer_next3d import Pytorch3dRasterizer, face_vertices, generate_triangles, transform_points, batch_orth_proj, angle2matrix
 from training.volumetric_rendering.ray_sampler import RaySampler
 import dnnlib
@@ -37,6 +37,15 @@ import scipy.io as sio
 # sys.path.append('/home/zxy/eg3d/eg3d/data')
 # from gt.get_uv_texture import get_uv_texture
 
+
+def print_grad(name, grad):
+    print(f"{name}:")
+    if torch.all(grad==0):
+        print("grad all 0s")
+        return 
+    # print(grad)
+    print('\t',grad.max(), grad.min(), grad.mean())
+    
 @persistence.persistent_class
 class TriPlaneGenerator(torch.nn.Module):
     def __init__(self,
@@ -63,7 +72,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=256, img_channels=32*3, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
         self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
         # self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
-        self.decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+        self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
         self.neural_rendering_resolution = 64
         self.rendering_kwargs = rendering_kwargs
         
@@ -79,16 +88,35 @@ class TriPlaneGenerator(torch.nn.Module):
         ### -------- gaussian splatting render --------
         self.gaussian_splatting_use_sr = False
         self.sh_degree = sh_degree
-        self.gaussian = None
-        self.viewpoint_camera = None
+        # self.gaussian = None
+        # self.viewpoint_camera = None
+        
+        # initialize camera and gaussians
+        
+        ## gaussian_splatting rendering resolution: 
+        ## V1: gaussian rendering -> 64 x 64 -> sr module --> 256 x 256: self.gaussian_splatting_use_sr = True
+        ## v2: gausian rendering -> 256 x 256 : self.gaussian_splatting_use_sr = False
+        if self.gaussian_splatting_use_sr:
+            image_size = self.neural_rendering_resolution # chekc
+        else:
+            image_size = 512
+        z_near, z_far = 0.0000001, 10 # TODO: find suitable value for this
+        self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
+        self.gaussian = GaussianModel(self.sh_degree, self.verts)
+        # setattr(self,"gaussian", GaussianModel(self.sh_degree, self.verts))
+        # setattr(self,"sh_degree",sh_degree)
         
     
-    def process_uv(self, uv_coords, uv_h = 256, uv_w = 256):
+    def process_uv_with_res(self, uv_coords, uv_h = 256, uv_w = 256):
+    # discard this method: this will map uv coord values to [0,res], while grid sample takes uv in [-1,1]
         uv_coords[:,0] = uv_coords[:,0]*(uv_w - 1)
         uv_coords[:,1] = uv_coords[:,1]*(uv_h - 1)
         uv_coords[:,1] = uv_h - uv_coords[:,1] - 1
         uv_coords = np.stack((uv_coords))
         return uv_coords
+    
+    def process_uv(self, uv_coords, uv_h = 256, uv_w = 256):
+        return uv_coords*2-1.0
     
     def load_face_model(self):
         # verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
@@ -110,6 +138,7 @@ class TriPlaneGenerator(torch.nn.Module):
         uv_coord_path = 'dataset_preprocessing/3dmm/BFM_UV.mat'
         C = sio.loadmat(uv_coord_path)
         uv_coords = C['UV'].copy(order = 'C') #(53215, 2) = [V, 2]
+    
         uv_coords_processed = self.process_uv(uv_coords, uv_h, uv_w) #(53215, 2)
         # uv_coords_processed = uv_coords_processed.astype(np.int32)
         self.register_buffer('raw_uvcoords', torch.tensor(uv_coords_processed[None], dtype=torch.float, device='cuda')) #[B, V, 2]
@@ -189,9 +218,7 @@ class TriPlaneGenerator(torch.nn.Module):
         # cv2.destroyAllWindows() 
     
     def getWorld2View_from_eg3d_c(self, c2w):
-        # c2w[:3, 1:3] *= -1 # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
-        c2w[:, :3, 1:3] *= -1
-        c2w[:, :3, 2] *= -1 # chaneg camera axes
+        c2w[:, :3, 1:3] *= -1 # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
         # transpose the R in c2w
         if not torch.all(c2w==0):
             w2c = torch.linalg.inv(c2w)
@@ -206,28 +233,20 @@ class TriPlaneGenerator(torch.nn.Module):
         w2c[:,:3,:3] = batch_R_trans
         return w2c
         # return w2c.contiguous() ## if the above have bug, try to make it contiguous
-
+    
+    
+    
             
     def synthesis(self, ws, c, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):
-        # cam2world_matrix = c[:, :16].view(-1, 4, 4)
-        # TODO: camera
-        cam2world_matrix = torch.tensor([[-0.015,0.003,-1,-1],
-                                         [-0.088,1,0.004,-0.5],
-                                         [0.995,0.088,-0.01521,-0.5],
-                                         [0,0,0,1]], dtype=torch.float, device='cuda')
-        cam2world_matrix = cam2world_matrix.view(1, 4, 4).repeat(4,1,1)
-        # intrinsics = c[:, 16:25].view(-1, 3, 3)
+        cam2world_matrix = c[:, :16].view(-1, 4, 4)
+        intrinsics = c[:, 16:25].view(-1, 3, 3)
         
         if neural_rendering_resolution is None:
             neural_rendering_resolution = self.neural_rendering_resolution
         else:
             self.neural_rendering_resolution = neural_rendering_resolution
 
-        # # Create a batch of rays for volume rendering
-        # ray_origins, ray_directions = self.ray_sampler(cam2world_matrix, intrinsics, neural_rendering_resolution)
-
-        # # Create triplanes by running StyleGAN backbone
-        # N, M, _ = ray_origins.shape
+        
         if use_cached_backbone and self._last_planes is not None:
             planes = self._last_planes
         else:
@@ -235,109 +254,115 @@ class TriPlaneGenerator(torch.nn.Module):
         if cache_backbone:
             self._last_planes = planes
 
-        # Reshape output into three 32-channel planes
-        ## TODO: convert from triplane to 3DMM here, maybe need a net to decode the feature to RGB or SH
-        # textures_gen_batch = planes # (4, 96, 256, 256)
-        textures_gen_batch = self.decoder(planes) # (4, 96, 256, 256) -> (4, 3*16, 256, 256)
-        
+    
         ## FIXME: replace with gt texture for debug 
         # textures = torch.tensor(get_uv_texture(), dtype=torch.float, device="cuda") # (53215, 3)
         
-        ### ----- original eg3d version -----
-        # planes = planes.view(len(planes), 3, 32, planes.shape[-2], planes.shape[-1]) # torch.Size([4, 3, 32, 256, 256])
+        original_eg3d = False
+        if original_eg3d:
+            ## ----- original eg3d version -----
+            # Create a batch of rays for volume rendering
+            ray_origins, ray_directions = self.ray_sampler(cam2world_matrix, intrinsics, neural_rendering_resolution)
 
-        # # Perform volume rendering
-        # feature_samples, depth_samples, weights_samples = self.renderer(planes, self.decoder, ray_origins, ray_directions, self.rendering_kwargs) # channels last
-        # # feature_samples: [4, 4096, 32]
-
-        # # Reshape into 'raw' neural-rendered image
-        # H = W = self.neural_rendering_resolution
-        # feature_image = feature_samples.permute(0, 2, 1).reshape(N, feature_samples.shape[-1], H, W).contiguous()
-        # depth_image = depth_samples.permute(0, 2, 1).reshape(N, 1, H, W)
-
-        # # Run superresolution to get final image
-        # rgb_image = feature_image[:, :3] # rgb: torch.Size([4, 3, 64, 64]), feature_image: torch.Size([4, 32, 64, 64])
-        # # st() # check feature image.shape
-        ### ----- original eg3d version [END] ----- 
-        
-        ### ----- gaussian splatting -----
-        # camera setting 
-        # TODO: determine the inputs
-        # width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform
-        # TODO: chenge 
-        # R, T = look_at_view_transform(10, 0, 0)
-        # world_view_transform = getWorld2View(R, T).transpose(0, 1).cuda() 
-        world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix) # (4, 4, 4) 
-
-        ## gaussian_splatting rendering resolution: 
-        ## V1: gaussian rendering -> 64 x 64 -> sr module --> 256 x 256: self.gaussian_splatting_use_sr = True
-        ## v2: gausian rendering -> 256 x 256 : self.gaussian_splatting_use_sr = False
-        if self.gaussian_splatting_use_sr:
-            image_size = self.neural_rendering_resolution # chekc
-        else:
-            image_size = 512
-        
-        # # replace the hard-coded focal with intrinsics from c
-        # focal = 1015 
-        # focal = intrinsics[0,0,1] * half_image_width * 2 # check
-        # fovy = fovx = 2*torch.arctan(half_image_width/focal)*180./math.pi
-        
-        # TODO: modify z-near and z-far in projection matrix
-        # projection_matrix = getProjectionMatrix(0.01, 50, fovx, fovy).transpose(0, 1)
-        z_near, z_far = 0.0000001, 10 # TODO: find suitable value for this
-        # st()
-        # projection_matrix = getProjectionMatrix(z_near, z_far, fovx, fovy).transpose(0, 1).to(world_view_transform_batch.device)
-        rgb_image_batch = []
-        
-        # initialize camera and gaussians
-        self.viewpoint_camera = MiniCam(c, image_size, image_size, z_near, z_far, world_view_transform_batch.device)
-        self.gaussian = GaussianModel(self.sh_degree, self.verts)
-        
-        # TODO: change bg_color, may also be generated?
-        white_background = True
-        bg_color = [1,1,1] if white_background else [0, 0, 0]
-        # bg_color = np.random.rand(3)
-        
-        for world_view_transform, textures_gen in zip(world_view_transform_batch,textures_gen_batch):
-            # full_proj_transform = world_view_transform @ projection_matrix
-            self.viewpoint_camera.update_transforms(world_view_transform)
-
-            # create a guassian model using generated texture
-            # TODO: change the input feature channel
-            # gaussian = GaussianModel(sh_degree=3)
-            # map textures to gaussian features 
-    
-            ## TODO: can gaussiam splatting run batch in parallel?
-            textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.detach().unsqueeze(1), align_corners=False) # (1, 48, 1, V)
-            # gaussian.create_from_generated_texture(self.verts, textures)
-            # self.gaussian.create_from_ply2(textures)
-            self.gaussian.create_from_ply2(self.verts_rgb)
-
-            # raterization
-            # TODO: change bg_color, may also be generated?
-            # white_background = False
-            # bg_color = [1,1,1] if white_background else [0, 0, 0]
-            # bg_color = np.random.rand(3)
-            background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+            # Create triplanes by running StyleGAN backbone
+            N, M, _ = ray_origins.shape
             
-            _rgb_image = gs_render(self.viewpoint_camera, self.gaussian, None, background)["render"]
-            rgb_image_batch.append(_rgb_image[None])
-        
-        rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
+            planes = planes.view(len(planes), 3, 32, planes.shape[-2], planes.shape[-1]) # torch.Size([4, 3, 32, 256, 256])
 
-        ### ----- gaussian splatting [END] -----
+            # Perform volume rendering
+            feature_samples, depth_samples, weights_samples = self.renderer(planes, self.decoder, ray_origins, ray_directions, self.rendering_kwargs) # channels last
+            # feature_samples: [4, 4096, 32]
+
+            # Reshape into 'raw' neural-rendered image
+            H = W = self.neural_rendering_resolution
+            feature_image = feature_samples.permute(0, 2, 1).reshape(N, feature_samples.shape[-1], H, W).contiguous()
+            depth_image = depth_samples.permute(0, 2, 1).reshape(N, 1, H, W)
+
+            # Run superresolution to get final image
+            rgb_image = feature_image[:, :3] # rgb: torch.Size([4, 3, 64, 64]), feature_image: torch.Size([4, 32, 64, 64])
+            st() # check feature image.shape
+            sr_image = self.superresolution(rgb_image, feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+            
+            # ## debug grad
+            # planes.requires_grad_(True)
+            # planes.register_hook(lambda grad: print_grad("planes.requires_grad", grad))
+            # rgb_image.requires_grad_(True)
+            # rgb_image.register_hook(lambda grad: print_grad("rgb_image.requires_grad", grad))
+            
+            ### ----- original eg3d version [END] ----- 
+        
+        
+        else:
+            
+            ### ----- gaussian splatting -----
+            # Reshape output into three 32-channel planes
+            ## TODO: convert from triplane to 3DMM here, maybe need a net to decode the feature to RGB or SH
+            # textures_gen_batch = planes # (4, 96, 256, 256)
+            textures_gen_batch = self.text_decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256), range [0,1]
+            
+
+            # textures_gen_batch = planes[:, :48]
+            # textures_gen_batch.requires_grad_(True)
+            # textures_gen_batch.register_hook(lambda grad: print_grad("textures_gen_batch.requires_grad", grad))
+            
+            # camera setting 
+            world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix) # (4, 4, 4) 
+            
+            # # replace the hard-coded focal with intrinsics from c
+            # focal = 1015 
+            # focal = intrinsics[0,0,1] * half_image_width * 2 # check
+            # fovy = fovx = 2*torch.arctan(half_image_width/focal)*180./math.pi
+            
+            # TODO: modify z-near and z-far in projection matrix
+            # projection_matrix = getProjectionMatrix(0.01, 50, fovx, fovy).transpose(0, 1)
+            # z_near, z_far = 0.0000001, 10 # TODO: find suitable value for this
+            # projection_matrix = getProjectionMatrix(z_near, z_far, fovx, fovy).transpose(0, 1).to(world_view_transform_batch.device)
+            rgb_image_batch = []
+            
+            # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
+            for world_view_transform, textures_gen in zip(world_view_transform_batch,textures_gen_batch):
+                # full_proj_transform = world_view_transform @ projection_matrix
+                self.viewpoint_camera.update_transforms(intrinsics, world_view_transform)
+
+                ## TODO: can gaussiam splatting run batch in parallel?
+                textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 96, 1, 5023)
+                # textures.requires_grad_(True) 
+                # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
                 
-        ## TODO: the below superresolution shall be kept?
-        ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?
-        # sr_image = self.superresolution(rgb_image, feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
-        if self.gaussian_splatting_use_sr:
-            sr_image = self.superresolution(rgb_image, textures_gen_batch, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
-        else:
-            sr_image = rgb_image
-            rgb_image = rgb_image[:,:,::8, ::8] # TODO: FIXME change this downsample to a smoother gaussian filtering
+                # gaussian.create_from_generated_texture(self.verts, textures)
+                # self.gaussian.create_from_ply2(textures)
+                self.gaussian.update_texutures(textures)
+                # raterization
+                white_background = False
+                bg_color = [1,1,1] if white_background else [0, 0, 0]
+                background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+                
+                _rgb_image = gs_render(self.viewpoint_camera, self.gaussian, None, background)["render"]
+                ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
+                
+                
+                rgb_image_batch.append(_rgb_image[None])
             
-        ## TODO: render depth_image. May not explicitly calculated from the face model since its the same for all.
-        depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
+            rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
+            ## FIXME: try different normalization method to normalize rgb image to [0,1]
+            rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
+            # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")
+            
+            # rgb_image.requires_grad_(True)
+            # rgb_image.register_hook(lambda grad: print_grad("rgb_image.requires_grad", grad))
+            
+            ## TODO: the below superresolution shall be kept?
+            ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?
+            if self.gaussian_splatting_use_sr:
+                sr_image = self.superresolution(rgb_image, textures_gen_batch, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+            else:
+                sr_image = rgb_image
+                rgb_image = rgb_image[:,:,::8, ::8] # TODO: FIXME change this downsample to a smoother gaussian filtering
+            
+           
+            ## TODO: render depth_image. May not explicitly calculated from the face model since its the same for all.
+            depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
+            ### ----- gaussian splatting [END] -----
 
         return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image}
     
@@ -414,7 +439,11 @@ class TextureDecoder(torch.nn.Module):
 
         N, H, W, C = x.shape
         x = x.reshape(N*H*W, C)
-
+        
         x = self.net(x)
+        
+        ## added sigmoid to make x in range 0~1
+        x = torch.sigmoid(x)*(1 + 2*0.001) - 0.001
+    
         x = x.reshape(N, H, W, -1)
         return x.permute(0, 3, 1, 2)
