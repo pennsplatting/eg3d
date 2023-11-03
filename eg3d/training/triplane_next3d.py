@@ -18,6 +18,7 @@ from training.volumetric_rendering.ray_sampler import RaySampler
 import dnnlib
 
 from ipdb import set_trace as st
+import cv2
 import torch.nn as nn
 from pytorch3d.io import load_obj
 import torch.nn.functional as F
@@ -72,7 +73,8 @@ class TriPlaneGenerator(torch.nn.Module):
         self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=256, img_channels=32*3, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
         self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
         # self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
-        self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+        # self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+        self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 3})
         self.neural_rendering_resolution = 64
         self.rendering_kwargs = rendering_kwargs
         
@@ -325,7 +327,7 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image_batch = []
             
             # FIXME: for debug, init gaussians with gt texture
-            self.gaussian_debug.update_gt_textures(self.verts_rgb)
+            self.gaussian_debug.update_rgb_textures(self.verts_rgb)
             real_image_batch = []
             
             # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
@@ -340,7 +342,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 # gaussian.create_from_generated_texture(self.verts, textures)
                 # self.gaussian.create_from_ply2(textures)
-                self.gaussian.update_texutures(textures)
+                self.gaussian.update_rgb_textures(textures.squeeze().permute(1,0))
                 # raterization
                 white_background = False
                 bg_color = [1,1,1] if white_background else [0, 0, 0]
@@ -357,7 +359,7 @@ class TriPlaneGenerator(torch.nn.Module):
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             real_image = torch.cat(real_image_batch)
-            ## FIXME: try different normalization method to normalize rgb image to [0,1]
+            ## FIXME: try different normalization method to normalize rgb image to [-1,1]
             rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
             real_image = (real_image / real_image.max() - 0.5) * 2
             # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")

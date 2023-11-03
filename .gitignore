@@ -12,9 +12,11 @@ cache*
 gif
 archive
 eval
+
+# output
 out
 training-runs
-.vscode
+*.ply
 
 # evaluation:
 temp/
@@ -36,4 +38,5 @@ eg3d/~
 
 #debug
 proj*
+.vscode
 
