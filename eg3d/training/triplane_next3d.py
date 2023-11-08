@@ -100,7 +100,7 @@ class TriPlaneGenerator(torch.nn.Module):
             image_size = self.neural_rendering_resolution # chekc
         else:
             image_size = 512 # ffhq: 512, 3dmm: 256
-        z_near, z_far = 0.0000001, 10 # TODO: find suitable value for this
+        z_near, z_far = 0.01, 100 # TODO: find suitable value for this. 0.01 and 100 for overfitting 3dmm
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         self.gaussian = GaussianModel(self.sh_degree, self.verts)
         # setattr(self,"gaussian", GaussianModel(self.sh_degree, self.verts))
@@ -331,6 +331,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 # gaussian.create_from_generated_texture(self.verts, textures)
                 # self.gaussian.create_from_ply2(textures)
+                st()
                 self.gaussian.update_texutures(textures)
                 # raterization
                 white_background = False
