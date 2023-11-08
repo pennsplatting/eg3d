@@ -14,6 +14,8 @@ import math
 import numpy as np
 from typing import NamedTuple
 
+from ipdb import set_trace as st
+
 class BasicPointCloud(NamedTuple):
     points : np.array
     colors : np.array
@@ -60,14 +62,16 @@ def getProjectionMatrix(znear, zfar, fovX, fovY):
     P = torch.zeros(4, 4)
 
     z_sign = 1.0
-
-    P[0, 0] = 2.0 * znear / (right - left)
-    P[1, 1] = 2.0 * znear / (top - bottom)
-    P[0, 2] = (right + left) / (right - left)
-    P[1, 2] = (top + bottom) / (top - bottom)
-    P[3, 2] = z_sign
-    P[2, 2] = z_sign * zfar / (zfar - znear)
-    P[2, 3] = -(zfar * znear) / (zfar - znear)
+    try:
+        P[0, 0] = 2.0 * znear / (right - left)
+        P[1, 1] = 2.0 * znear / (top - bottom)
+        P[0, 2] = (right + left) / (right - left)
+        P[1, 2] = (top + bottom) / (top - bottom)
+        P[3, 2] = z_sign
+        P[2, 2] = z_sign * zfar / (zfar - znear)
+        P[2, 3] = -(zfar * znear) / (zfar - znear)
+    except:
+        st()
     return P
 
 def fov2focal(fov, pixels):

@@ -222,6 +222,75 @@ def training_loop(
             phase.start_event = torch.cuda.Event(enable_timing=True)
             phase.end_event = torch.cuda.Event(enable_timing=True)
 
+        
+    ## Load same 3dmm data using GaussianSplatting's data loader
+    ## ---------------------begin-------------------------------
+    from PIL import Image
+    from pathlib import Path
+    from typing import NamedTuple
+    from training.gaussian_splatting.utils.graphics_utils import focal2fov, fov2focal #getWorld2View2,
+    class CameraInfo(NamedTuple):
+        uid: int
+        c2w_blender: np.array
+        # R: np.array
+        # T: np.array
+        FovY: np.array
+        FovX: np.array
+        image: np.array
+        image_path: str
+        image_name: str
+        width: int
+        height: int
+    
+    def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):
+        cam_infos = []
+
+        with open(os.path.join(path, transformsfile)) as json_file:
+            contents = json.load(json_file)
+            fovx = contents["camera_angle_x"]
+
+            frames = contents["frames"]
+            for idx, frame in enumerate(frames):
+                cam_name = os.path.join(path, frame["file_path"] + extension)
+
+                # NeRF 'transform_matrix' is a camera-to-world transform
+                c2w = np.array(frame["transform_matrix"])
+                ## the following has been done in the synthesis()->getWorld2View_from_eg3d_c()
+                # # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+                # c2w[:3, 1:3] *= -1
+
+                # get the world-to-camera transform and set R, T
+                # w2c = np.linalg.inv(c2w)
+                # R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
+                # T = w2c[:3, 3]
+
+                image_path = os.path.join(path, cam_name)
+                image_name = Path(cam_name).stem
+                image = Image.open(image_path)
+
+                im_data = np.array(image.convert("RGBA"))
+
+                bg = np.array([1,1,1]) if white_background else np.array([0, 0, 0])
+
+                norm_data = im_data / 255.0
+                arr = norm_data[:,:,:3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
+                image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
+
+                fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
+                FovY = fovy 
+                FovX = fovx
+
+                cam_infos.append(CameraInfo(uid=idx, c2w_blender=c2w, FovY=FovY, FovX=FovX,
+                                image=image, image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
+                
+        return cam_infos
+    ## args as in GS
+    path = '/home/xuyimeng/Repo/face3d/examples/results/nerf_3dmm'
+    white_background = False
+    extension=".png"
+    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
+    ## --------------------- end -------------------------------
+    
     # Export sample images.
     grid_size = None
     grid_z = None
@@ -229,9 +298,38 @@ def training_loop(
     if rank == 0:
         print('Exporting sample images...')
         grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
+        ## images: (120, 3, 512, 512). uint8
+        ### Save image grid of 3DMM data -------(begin)-------
+        viewpoint_stack_grid = train_cam_infos.copy()
+        viewpoint_cam_grid = viewpoint_stack_grid[:labels.shape[0]] # [viewpoint_stack_grid.pop(i) for i in range(labels.shape[0]) ]
+        images = np.stack([np.array(_cam.image) for _cam in viewpoint_cam_grid]).transpose(0,3,1,2) # check shape and type with images
+        ### Save image grid of 3DMM data -------( end )-------
+        
         save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
-        grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
+        
+        ### Modify image grid z & c of 3DMM data -------(begin)-------
+        # grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
+        grid_z = torch.zeros([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
+        
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
+        ## TODO: for overfitting settings, need to:
+        ## 1. fix all z to 0s
+        ## 2. sample c from 3dmm rather than FFHQ
+        
+        grid_vp_cam_c = []
+        for viewpoint_cam in viewpoint_cam_grid:
+            # convert c2w and fox and foxvy to real_c
+            fake_intrinsics = torch.zeros(9)
+            fake_intrinsics[0] = viewpoint_cam.FovX
+            fake_intrinsics[1] = viewpoint_cam.FovY
+        
+            ## real_c.shape: torch.Size([4, 25])
+            vp_cam_c = torch.cat([torch.tensor(viewpoint_cam.c2w_blender.flatten()), fake_intrinsics], dim=0).to(device, torch.float32)
+            grid_vp_cam_c.append(vp_cam_c)
+        vp_cam_c_grid = torch.stack(grid_vp_cam_c).split(batch_gpu)
+        grid_c = vp_cam_c_grid
+        ### Modify image grid z & c of 3DMM data -------( end )-------
+        
 
     # Initialize logs.
     if rank == 0:
@@ -260,115 +358,32 @@ def training_loop(
     batch_idx = 0
     if progress_fn is not None:
         progress_fn(0, total_kimg)
-        
-    ## Load same 3dmm data using GaussianSplatting's data loader
-    ## ---------------------begin-------------------------------
-    first_iter = 0
-    # tb_writer = prepare_output_and_logger(dataset)
-    gaussians = GaussianModel(dataset.sh_degree)
-    scene = Scene(dataset, gaussians)
-    # gaussians.training_setup(opt)
-    # if checkpoint:
-    #     (model_params, first_iter) = torch.load(checkpoint)
-    #     gaussians.restore(model_params, opt)
-
-    # bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
-    # background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-
-    # iter_start = torch.cuda.Event(enable_timing = True)
-    # iter_end = torch.cuda.Event(enable_timing = True)
-
-    viewpoint_stack = None
-    # ema_loss_for_log = 0.0
-    # progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
-    first_iter += 1
-    for iteration in range(first_iter, opt.iterations + 1):        
-        # if network_gui.conn == None:
-        #     network_gui.try_connect()
-        # while network_gui.conn != None:
-        #     try:
-        #         net_image_bytes = None
-        #         custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
-        #         if custom_cam != None:
-        #             net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer)["render"]
-                    
-        #             net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
-                
-        #         network_gui.send(net_image_bytes, dataset.source_path)
-        #         if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
-        #             break
-        #     except Exception as e:
-        #         network_gui.conn = None
-        # iter_start.record()
-
-        # gaussians.update_learning_rate(iteration)
-
-        # # Every 1000 its we increase the levels of SH up to a maximum degree
-        # if iteration % 1000 == 0:
-        #     gaussians.oneupSHdegree()
-
-        # Pick a random Camera
-        if not viewpoint_stack:
-            viewpoint_stack = scene.getTrainCameras().copy()
-        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
-
-        # Render
-        # if (iteration - 1) == debug_from:
-        #     pipe.debug = True
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background)
-        #  render_pkg['render'].min(),  render_pkg['render'].max(): 0~1
-        image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-
-        # Loss
-        gt_image = viewpoint_cam.original_image.cuda() # 0~1, [3,256, 256]
-        # Ll1 = l1_loss(image, gt_image)
-        # # ## TODO: debug script. Delete when no longer need.
-        # # debug_save_image = True
-        # # if debug_save_image and (iteration in saving_iterations):
-        # #     # Save the rendered image
-        # #     image_filename = '{}/image_gt_{:03d}.jpg'.format(scene.model_path, iteration)
-        # #     io.imsave(image_filename, (np.transpose(np.asarray(gt_image.detach().clone().cpu()), (1, 2, 0)) * 255).astype(np.uint8))
-        # #     print(f"Saved gt image: {image_filename}")
-        # #     image_filename = '{}/image_gen_{:03d}.jpg'.format(scene.model_path, iteration)
-        # #     io.imsave(image_filename, (np.transpose(np.asarray(image.detach().clone().cpu()), (1, 2, 0)) * 255).astype(np.uint8))
-        # #     print(f"Saved gen image: {image_filename}")
     
-            
-        # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-        # loss.backward()
-
-        # iter_end.record()
-
-    ## --------------------- end -------------------------------
     
     ## TODO: bridge from gaussian splatting to eg3d data
     ## --------------------- begin -------------------------------
     viewpoint_stack = None
     ## --------------------- end -------------------------------
-        
+
     while True:
         
-       
-        
-        # # Fetch training data.
-        # with torch.autograd.profiler.record_function('data_fetch'):
+        # Fetch training data.
+        with torch.autograd.profiler.record_function('data_fetch'):
             
-        #     phase_real_img, phase_real_c = next(training_set_iterator)
-        #     phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu) #phase_real_img[0].shape: torch.Size([4, 3, 512, 512])
-        #     phase_real_c = phase_real_c.to(device).split(batch_gpu) # tuple, len=1, phase_real_c[0].shape:[4, 25]=[bs, c2w_intrinsics]
-        #     ## TODO-xuyi: to overfit, we need to use L1/L2/SSIM losses, therefore remove noise and do exact matching between real and gen
-        #     # all_gen_z = torch.randn([len(phases) * batch_size, G.z_dim], device=device)
-        #     all_gen_z = torch.zeros([len(phases) * batch_size, G.z_dim], device=device)
-        #     all_gen_z = [phase_gen_z.split(batch_gpu) for phase_gen_z in all_gen_z.split(batch_size)]
-        #     ## xuyi: phase_real_* are repeatly used for all 4 training phases, while the phase_gen_* are different in each phases
-        #     # therefore we copy the phase_real* for len(phases) times to do exact matching
-        #     # instead of doing replacement here, we directly modify the input for accumulate_gradients as below FIXME
-        #     all_gen_c = [training_set.get_label(np.random.randint(len(training_set))) for _ in range(len(phases) * batch_size)]
-        #     all_gen_c = torch.from_numpy(np.stack(all_gen_c)).pin_memory().to(device)
-        #     all_gen_c = [phase_gen_c.split(batch_gpu) for phase_gen_c in all_gen_c.split(batch_size)]
+            phase_real_img, phase_real_c = next(training_set_iterator)
+            phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu) #phase_real_img[0].shape: torch.Size([4, 3, 512, 512])
+            phase_real_c = phase_real_c.to(device).split(batch_gpu) # tuple, len=1, phase_real_c[0].shape:[4, 25]=[bs, c2w_intrinsics]
+            ## TODO-xuyi: to overfit, we need to use L1/L2/SSIM losses, therefore remove noise and do exact matching between real and gen
+            # all_gen_z = torch.randn([len(phases) * batch_size, G.z_dim], device=device)
+            all_gen_z = torch.zeros([len(phases) * batch_size, G.z_dim], device=device)
+            all_gen_z = [phase_gen_z.split(batch_gpu) for phase_gen_z in all_gen_z.split(batch_size)]
+            ## xuyi: phase_real_* are repeatly used for all 4 training phases, while the phase_gen_* are different in each phases
+            # therefore we copy the phase_real* for len(phases) times to do exact matching
+            # instead of doing replacement here, we directly modify the input for accumulate_gradients as below FIXME
+            all_gen_c = [training_set.get_label(np.random.randint(len(training_set))) for _ in range(len(phases) * batch_size)]
+            all_gen_c = torch.from_numpy(np.stack(all_gen_c)).pin_memory().to(device)
+            all_gen_c = [phase_gen_c.split(batch_gpu) for phase_gen_c in all_gen_c.split(batch_size)]
         
-        
-
         
         # Execute training phases.
         for phase, phase_gen_z, phase_gen_c in zip(phases, all_gen_z, all_gen_c):
@@ -387,13 +402,41 @@ def training_loop(
                  ## Load same 3dmm data using GaussianSplatting's data loader
                 ## ---------------------begin-------------------------------
                 # Pick a random Camera
-                if not viewpoint_stack:
-                    viewpoint_stack = scene.getTrainCameras().copy()
-                viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
-                
-                gt_image = viewpoint_cam.original_image.cuda()
+                if (not viewpoint_stack) or (len(viewpoint_stack) < batch_size):
+                    viewpoint_stack = train_cam_infos.copy()
+        
+                batch_cams = [viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1)) for i in range(batch_size)]
+                batch_vp_cam_c = []
+                batch_vp_cam_gt_img = []
+                for viewpoint_cam in batch_cams:
+                    
+                    ## real_img: ([4, 3, 512, 512]
+                    gt_image = torch.tensor(np.array(viewpoint_cam.image).transpose(2,0,1), device=real_img.device) #.cuda()
+                    batch_vp_cam_gt_img.append(gt_image)
+                    
+                    # convert c2w and fox and foxvy to real_c
+                    fake_intrinsics = torch.zeros(9)
+                    fake_intrinsics[0] = viewpoint_cam.FovX
+                    fake_intrinsics[1] = viewpoint_cam.FovY
+             
+                    ## real_c.shape: torch.Size([4, 25])
+                    vp_cam_c = torch.cat([torch.tensor(viewpoint_cam.c2w_blender.flatten()), fake_intrinsics], dim=0).to(real_c.device, real_c.dtype)
+                    batch_vp_cam_c.append(vp_cam_c)
+                    
+                # st()
+                real_img_3dmm = torch.stack(batch_vp_cam_gt_img) # it's actually GT image rather than REAL image!!
+                real_img_3dmm_norm = real_img_3dmm.to(real_img.dtype) / 255. * 2 - 1
+                real_img = real_img_3dmm_norm
+                real_c = torch.stack(batch_vp_cam_c)
+                gen_c = real_c
+                gen_z = torch.zeros_like(gen_z)
+                print(f"Updated shape of real_image={real_img.shape}, real_c={real_c.shape}")
                 ## --------------------- end -------------------------------
-                loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=gt_image, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) # L1/L2 loss: gen_c = real_c, gen_z = 0
+                # loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=gt_image, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) # L1/L2 loss: gen_c = real_c, gen_z = 0
+
+                loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=real_img, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
+                ## 
+                # loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg)
             phase.module.requires_grad_(False)
 
             # Update weights.
@@ -469,10 +512,11 @@ def training_loop(
                 print('Aborting...')
 
         # Save image snapshot.
+        ## TODO: change the z and c here to map the 3DMM data, now using FFHQ cam
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             out = [G_ema(z=z, c=c, noise_mode='const') for z, c in zip(grid_z, grid_c)]
-            images = torch.cat([o['image'].cpu() for o in out]).numpy()
-            images_raw = torch.cat([o['image_raw'].cpu() for o in out]).numpy()
+            images = torch.cat([o['image'].detach().cpu() for o in out]).numpy()
+            images_raw = torch.cat([o['image_raw'].detach().cpu() for o in out]).numpy()
             images_depth = -torch.cat([o['image_depth'].cpu() for o in out]).numpy()
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
             save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=[-1,1], grid_size=grid_size)

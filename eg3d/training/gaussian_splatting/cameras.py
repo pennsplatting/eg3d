@@ -78,11 +78,43 @@ class MiniCam(nn.Module):
         
         
         
-    def update_transforms(self, intrinsics, world_view_transform, device=None):
+    def update_transforms(self, intrinsics, world_view_transform, direct_fov= False, device=None):
         # intrinsics = c[:, 16:25].view(-1, 3, 3)
-        focal = intrinsics[0,0,1] * self.image_width # check
-        fov = 2*torch.arctan(self.image_width/2/focal)*180./math.pi
-        self.FoVx = self.FoVy = fov
+        
+        # focal = intrinsics[0,0,0] * self.image_width # check
+        # fov = 2*torch.arctan(self.image_width/2/focal)*180./math.pi
+        # self.FoVx = self.FoVy = fov
+        
+        # # print("using FFHQ intrinsics")
+        # # print(self.FoVx, self.FoVy)
+        # # if not torch.all(intrinsics==0):
+        # #     print(intrinsics)
+        # #     st()
+        
+        if torch.all(intrinsics==0):
+            self.FoVx = 30.
+            self.FoVy = -1.4159
+            
+        elif intrinsics[0,0,-1] != 0:
+            focal = intrinsics[0,0,1] * self.image_width # check
+            fov = 2*torch.arctan(self.image_width/2/focal)*180./math.pi
+            self.FoVx = self.FoVy = fov
+            print("using FFHQ intrinsics")
+            print(self.FoVx, self.FoVy)
+            if not torch.all(intrinsics==0):
+                print(intrinsics)
+                st()
+        else:
+            ## FIXME: this is fake intrinsics!! only used to con    tain FoVs!
+            self.FoVx = intrinsics[0,0,0] # 30.
+            self.FoVy = intrinsics[0,0,1] # -1.4159
+            # print("using direct_fov from 3DMM FoVx")
+            # print(self.FoVx, self.FoVy)
+            # if not torch.all(intrinsics==0.):
+            #     print(intrinsics)
+            #     # st()
+
+        ## FIXME: type mismatch: Double float
         self.projection_matrix = getProjectionMatrix(self.znear, self.zfar, self.FoVx, self.FoVy).transpose(0, 1).to(world_view_transform.device)
         
         self.world_view_transform = world_view_transform

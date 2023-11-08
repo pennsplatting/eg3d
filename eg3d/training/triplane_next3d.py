@@ -99,7 +99,7 @@ class TriPlaneGenerator(torch.nn.Module):
         if self.gaussian_splatting_use_sr:
             image_size = self.neural_rendering_resolution # chekc
         else:
-            image_size = 512
+            image_size = 512 # ffhq: 512, 3dmm: 256
         z_near, z_far = 0.0000001, 10 # TODO: find suitable value for this
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         self.gaussian = GaussianModel(self.sh_degree, self.verts)
@@ -218,6 +218,7 @@ class TriPlaneGenerator(torch.nn.Module):
         # cv2.destroyAllWindows() 
     
     def getWorld2View_from_eg3d_c(self, c2w):
+        # print("----getWorld2View_from_eg3d_c!!")
         c2w[:, :3, 1:3] *= -1 # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
         # transpose the R in c2w
         if not torch.all(c2w==0):
@@ -256,6 +257,7 @@ class TriPlaneGenerator(torch.nn.Module):
         # textures = torch.tensor(get_uv_texture(), dtype=torch.float, device="cuda") # (53215, 3)
         
         original_eg3d = False
+        overfitting = True
         if original_eg3d:
             ## ----- original eg3d version -----
             # Create a batch of rays for volume rendering
@@ -319,7 +321,8 @@ class TriPlaneGenerator(torch.nn.Module):
             # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
             for world_view_transform, textures_gen in zip(world_view_transform_batch,textures_gen_batch):
                 # full_proj_transform = world_view_transform @ projection_matrix
-                self.viewpoint_camera.update_transforms(intrinsics, world_view_transform)
+                # self.viewpoint_camera.update_transforms(intrinsics, world_view_transform)
+                self.viewpoint_camera.update_transforms(intrinsics, world_view_transform, direct_fov=overfitting)
 
                 ## TODO: can gaussiam splatting run batch in parallel?
                 textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 96, 1, 5023)
@@ -354,7 +357,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 sr_image = self.superresolution(rgb_image, textures_gen_batch, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
             else:
                 sr_image = rgb_image
-                rgb_image = rgb_image[:,:,::8, ::8] # TODO: FIXME change this downsample to a smoother gaussian filtering
+                rgb_image = rgb_image[:,:,::2, ::2] # TODO: FIXME change this downsample to a smoother gaussian filtering
             
            
             ## TODO: render depth_image. May not explicitly calculated from the face model since its the same for all.

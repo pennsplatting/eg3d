@@ -264,7 +264,8 @@ def main(**kwargs):
 
     # Base configuration.
     c.ema_kimg = c.batch_size * 10 / 32
-    c.G_kwargs.class_name = 'training.triplane.TriPlaneGenerator'
+    # c.G_kwargs.class_name = 'training.triplane.TriPlaneGenerator'
+    c.G_kwargs.class_name = 'training.triplane_next3d.TriPlaneGenerator'
     c.D_kwargs.class_name = 'training.dual_discriminator.DualDiscriminator'
     c.G_kwargs.fused_modconv_default = 'inference_only' # Speed up training by using regular convolutions instead of grouped convolutions.
     c.loss_kwargs.filter_mode = 'antialiased' # Filter mode for raw images ['antialiased', 'none', float [0-1]]

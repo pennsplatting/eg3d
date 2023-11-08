@@ -95,21 +95,30 @@ class StyleGAN2Loss(Loss):
             phase = {'Greg': 'none', 'Gboth': 'Gmain'}.get(phase, phase)
         if self.r1_gamma == 0:
             phase = {'Dreg': 'none', 'Dboth': 'Dmain'}.get(phase, phase)
-        blur_sigma = max(1 - cur_nimg / (self.blur_fade_kimg * 1e3), 0) * self.blur_init_sigma if self.blur_fade_kimg > 0 else 0
-        r1_gamma = self.r1_gamma
+        # blur_sigma = max(1 - cur_nimg / (self.blur_fade_kimg * 1e3), 0) * self.blur_init_sigma if self.blur_fade_kimg > 0 else 0
+        # r1_gamma = self.r1_gamma
 
+        ## TODO; can we remove alpha?
         alpha = min(cur_nimg / (self.gpc_reg_fade_kimg * 1e3), 1) if self.gpc_reg_fade_kimg > 0 else 1
-        swapping_prob = (1 - alpha) * 1 + alpha * self.gpc_reg_prob if self.gpc_reg_prob is not None else None
+        # swapping_prob = (1 - alpha) * 1 + alpha * self.gpc_reg_prob if self.gpc_reg_prob is not None else None
+        swapping_prob = 0 # in L1 loss we forbid swapping
         
         if self.neural_rendering_resolution_final is not None:
             alpha = min(cur_nimg / (self.neural_rendering_resolution_fade_kimg * 1e3), 1)
             neural_rendering_resolution = int(np.rint(self.neural_rendering_resolution_initial * (1 - alpha) + self.neural_rendering_resolution_final * alpha))
         else:
             neural_rendering_resolution = self.neural_rendering_resolution_initial
-        st()
+        
         gen_img, _gen_ws = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
-        loss = torch.nn.functional.l1_loss(real_img, gen_img)
+        
+        loss = torch.nn.functional.l1_loss(real_img, gen_img['image_raw']) # 'image':[4, 3, 512, 512], 'image_raw':[4, 3, 64, 64]
         loss.backward()
+        # st()
+        
+        # ### below is the implementation in gaussian splatting
+        # Ll1 = l1_loss(image, gt_image)
+        # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        # loss.backward()
         
     def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, gain, cur_nimg):
         assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth']
@@ -150,6 +159,11 @@ class StyleGAN2Loss(Loss):
                 training_stats.report('Loss/G/loss', loss_Gmain)
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 loss_Gmain.mean().mul(gain).backward()
+                # ## debug l1 loss
+                # # st()
+                # loss = torch.nn.functional.l1_loss(real_img['image'], gen_img['image']) # 'image':[4, 3, 512, 512], 'image_raw':[4, 3, 64, 64]
+                # loss.backward()
+                # ## debug end
                 
             #     ## FIXME: debug grad
             #     print(f"Gradients for self.G -----begin---")
