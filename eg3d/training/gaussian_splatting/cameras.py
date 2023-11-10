@@ -105,11 +105,13 @@ class MiniCam(nn.Module):
                 print(intrinsics)
                 st()
         else:
-            ## FIXME: this is fake intrinsics!! only used to con    tain FoVs!
+            ## FIXME: this is fake intrinsics!! only used to contain FoVs!
             self.FoVx = intrinsics[0,0,0] # 30.
             self.FoVy = intrinsics[0,0,1] # -1.4159
-            # print("using direct_fov from 3DMM FoVx")
-            # print(self.FoVx, self.FoVy)
+            # self.FoVx = 180. # intrinsics[0,0,0] # 30.
+            # self.FoVy = 180. # intrinsics[0,0,1] # -1.4159
+            print("using direct_fov from 3DMM FoVx")
+            print(self.FoVx, self.FoVy)
             # if not torch.all(intrinsics==0.):
             #     print(intrinsics)
             #     # st()
@@ -123,7 +125,10 @@ class MiniCam(nn.Module):
             view_inv = torch.inverse(self.world_view_transform) 
         else:
             view_inv = self.world_view_transform
-        self.camera_center = view_inv[3][:3]
+        # st()
+        # self.camera_center = view_inv[3][:3]
+        self.camera_center = view_inv[:3, 3]
+        print(f"camera_center{self.camera_center}")
 
 ## TODO: implement inheritance
 # class MiniCam2(MiniCam):

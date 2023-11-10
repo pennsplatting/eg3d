@@ -244,6 +244,7 @@ def training_loop(
     
     def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):
         cam_infos = []
+        print(f"Loading data from {path}")
 
         with open(os.path.join(path, transformsfile)) as json_file:
             contents = json.load(json_file)
@@ -285,7 +286,9 @@ def training_loop(
                 
         return cam_infos
     ## args as in GS
-    path = '/home/xuyimeng/Repo/face3d/examples/results/nerf_3dmm'
+    # path = '/home/xuyimeng/Repo/face3d/examples/results/nerf_3dmm'
+    path = '/home/xuyimeng/Repo/face3d/examples/results/nerf_3dmm_512'
+    # path = '/mnt/kostas-graid/datasets/xuyimeng/blender/nerf_synthetic/lego/'
     white_background = False
     extension=".png"
     train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
@@ -305,6 +308,7 @@ def training_loop(
         images = np.stack([np.array(_cam.image) for _cam in viewpoint_cam_grid]).transpose(0,3,1,2) # check shape and type with images
         ### Save image grid of 3DMM data -------( end )-------
         
+        # st()
         save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
         
         ### Modify image grid z & c of 3DMM data -------(begin)-------
@@ -430,7 +434,7 @@ def training_loop(
                 real_c = torch.stack(batch_vp_cam_c)
                 gen_c = real_c
                 gen_z = torch.zeros_like(gen_z)
-                print(f"Updated shape of real_image={real_img.shape}, real_c={real_c.shape}")
+                # print(f"Updated shape of real_image={real_img.shape}, real_c={real_c.shape}")
                 ## --------------------- end -------------------------------
                 # loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=gt_image, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) # L1/L2 loss: gen_c = real_c, gen_z = 0
 

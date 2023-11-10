@@ -104,7 +104,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         scales = scales,
         rotations = rotations,
         cov3D_precomp = cov3D_precomp)
-
+    # st()
     debug_grad = False
     if debug_grad:
         shs.requires_grad_(True)

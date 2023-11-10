@@ -360,7 +360,7 @@ def training_loop(
         # Save image snapshot.
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             out = [G_ema(z=z, c=c, noise_mode='const') for z, c in zip(grid_z, grid_c)]
-            st()
+            # st()
             images = torch.cat([o['image'].cpu() for o in out]).detach().numpy()
             images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
             images_depth = -torch.cat([o['image_depth'].cpu() for o in out]).detach().numpy()

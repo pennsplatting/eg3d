@@ -111,7 +111,7 @@ class StyleGAN2Loss(Loss):
         
         gen_img, _gen_ws = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
         
-        loss = torch.nn.functional.l1_loss(real_img, gen_img['image_raw']) # 'image':[4, 3, 512, 512], 'image_raw':[4, 3, 64, 64]
+        loss = torch.nn.functional.l1_loss(real_img, gen_img['image']) # 'image':[4, 3, 512, 512], 'image_raw':[4, 3, 64, 64]
         loss.backward()
         # st()
         

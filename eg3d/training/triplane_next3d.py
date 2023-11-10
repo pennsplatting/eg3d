@@ -100,7 +100,8 @@ class TriPlaneGenerator(torch.nn.Module):
             image_size = self.neural_rendering_resolution # chekc
         else:
             image_size = 512 # ffhq: 512, 3dmm: 256
-        z_near, z_far = 0.01, 100 # TODO: find suitable value for this. 0.01 and 100 for overfitting 3dmm
+        # z_near, z_far = 0.01, 100 # TODO: find suitable value for this. 0.01 and 100 for overfitting 3dmm
+        z_near, z_far = 1000, -100 # as in face3d ## NO affect
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         self.gaussian = GaussianModel(self.sh_degree, self.verts)
         # setattr(self,"gaussian", GaussianModel(self.sh_degree, self.verts))
@@ -119,19 +120,32 @@ class TriPlaneGenerator(torch.nn.Module):
         return uv_coords*2-1.0
     
     def load_face_model(self):
+        overfitting = True
         # verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
         ## align with the actual training space of 3dmm, rather than the saved ply space
         verts_path = '../dataset_preprocessing/3dmm/gs_flipped_uv_textured_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
+        verts_path_ovft = '../dataset_preprocessing/3dmm/points3d.ply' # overfitting the 3dmm data
+        # verts_path = '/mnt/kostas-graid/datasets/xuyimeng/blender/nerf_synthetic/lego/'
         
         plydata = PlyData.read(verts_path)
-        verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
-        # normalize to [-0.5, 0.5] and place the center at origin
-        verts_norm = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
-        verts_norm = torch.tensor(verts_norm, dtype=torch.float, device='cuda')
-        self.register_buffer('verts', verts_norm)
         
         verts_rgb = np.stack([plydata['vertex'][ax] for ax in ['red', 'green', 'blue']], axis=-1) # [V,3], 0~255
         self.register_buffer('verts_rgb', torch.tensor(verts_rgb, dtype=torch.float, device='cuda'))
+
+        box_center = self.rendering_kwargs['box_warp'] / 2
+        box_scale = 512
+        if overfitting:
+            print(f"Loading vertices from {verts_path_ovft}")
+            plydata = PlyData.read(verts_path_ovft)
+            box_center = 0.
+            box_scale = 1.0
+        print(f"box_center: {box_center }; box_scale: {box_scale}")    
+        verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+        # normalize to [-0.5, 0.5] and place the center at origin
+        verts_norm = verts /box_scale  - box_center
+        verts_norm = torch.tensor(verts_norm, dtype=torch.float, device='cuda')
+        self.register_buffer('verts', verts_norm)
+        
         
         # load uv coords & gt uv map
         uv_h, uv_w = self.uv_resolution, self.uv_resolution
@@ -331,8 +345,10 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 # gaussian.create_from_generated_texture(self.verts, textures)
                 # self.gaussian.create_from_ply2(textures)
-                st()
-                self.gaussian.update_texutures(textures)
+                # st()
+                # self.gaussian.update_texutures(textures)
+                self.gaussian.update_rgb_textures(self.verts_rgb)
+                # st()
                 # raterization
                 white_background = False
                 bg_color = [1,1,1] if white_background else [0, 0, 0]
