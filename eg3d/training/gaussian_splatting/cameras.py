@@ -119,16 +119,15 @@ class MiniCam(nn.Module):
         ## FIXME: type mismatch: Double float
         self.projection_matrix = getProjectionMatrix(self.znear, self.zfar, self.FoVx, self.FoVy).transpose(0, 1).to(world_view_transform.device)
         
-        self.world_view_transform = world_view_transform
-        self.full_proj_transform = world_view_transform @ self.projection_matrix
+        self.world_view_transform = world_view_transform ## which is already in tranpose
+        self.full_proj_transform = world_view_transform @ self.projection_matrix # both are in transpose
         if not torch.all(self.world_view_transform==0): 
             view_inv = torch.inverse(self.world_view_transform) 
         else:
             view_inv = self.world_view_transform
-        # st()
-        # self.camera_center = view_inv[3][:3]
-        self.camera_center = view_inv[:3, 3]
-        print(f"camera_center{self.camera_center}")
+       
+        self.camera_center = view_inv[3, :3]
+        print(f"camera_center with [3, :3]{self.camera_center}")
 
 ## TODO: implement inheritance
 # class MiniCam2(MiniCam):

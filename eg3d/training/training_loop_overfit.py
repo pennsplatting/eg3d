@@ -256,15 +256,10 @@ def training_loop(
 
                 # NeRF 'transform_matrix' is a camera-to-world transform
                 c2w = np.array(frame["transform_matrix"])
-                ## the following has been done in the synthesis()->getWorld2View_from_eg3d_c()
-                # # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
-                # c2w[:3, 1:3] *= -1
-
-                # get the world-to-camera transform and set R, T
-                # w2c = np.linalg.inv(c2w)
-                # R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
-                # T = w2c[:3, 3]
-
+                
+                ## changing from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+                ## has been done in the synthesis()->getWorld2View_from_eg3d_c()
+               
                 image_path = os.path.join(path, cam_name)
                 image_name = Path(cam_name).stem
                 image = Image.open(image_path)
@@ -407,8 +402,9 @@ def training_loop(
                 ## ---------------------begin-------------------------------
                 # Pick a random Camera
                 if (not viewpoint_stack) or (len(viewpoint_stack) < batch_size):
-                    viewpoint_stack = train_cam_infos.copy()
+                    viewpoint_stack = train_cam_infos.copy() * batch_size
         
+                # st()
                 batch_cams = [viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1)) for i in range(batch_size)]
                 batch_vp_cam_c = []
                 batch_vp_cam_gt_img = []

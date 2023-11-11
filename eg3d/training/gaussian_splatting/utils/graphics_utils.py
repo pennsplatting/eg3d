@@ -61,7 +61,8 @@ def getProjectionMatrix(znear, zfar, fovX, fovY):
 
     P = torch.zeros(4, 4)
 
-    z_sign = 1.0
+    z_sign = -1.0
+    print(f"z_sign:{z_sign}")
     try:
         P[0, 0] = 2.0 * znear / (right - left)
         P[1, 1] = 2.0 * znear / (top - bottom)

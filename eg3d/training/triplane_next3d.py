@@ -102,6 +102,7 @@ class TriPlaneGenerator(torch.nn.Module):
             image_size = 512 # ffhq: 512, 3dmm: 256
         # z_near, z_far = 0.01, 100 # TODO: find suitable value for this. 0.01 and 100 for overfitting 3dmm
         z_near, z_far = 1000, -100 # as in face3d ## NO affect
+        print(f"z_near, z_far: {z_near, z_far}")
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         self.gaussian = GaussianModel(self.sh_degree, self.verts)
         # setattr(self,"gaussian", GaussianModel(self.sh_degree, self.verts))
@@ -120,12 +121,11 @@ class TriPlaneGenerator(torch.nn.Module):
         return uv_coords*2-1.0
     
     def load_face_model(self):
-        overfitting = True
+        _overfitting = True
         # verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
         ## align with the actual training space of 3dmm, rather than the saved ply space
         verts_path = '../dataset_preprocessing/3dmm/gs_flipped_uv_textured_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
         verts_path_ovft = '../dataset_preprocessing/3dmm/points3d.ply' # overfitting the 3dmm data
-        # verts_path = '/mnt/kostas-graid/datasets/xuyimeng/blender/nerf_synthetic/lego/'
         
         plydata = PlyData.read(verts_path)
         
@@ -134,7 +134,7 @@ class TriPlaneGenerator(torch.nn.Module):
 
         box_center = self.rendering_kwargs['box_warp'] / 2
         box_scale = 512
-        if overfitting:
+        if _overfitting:
             print(f"Loading vertices from {verts_path_ovft}")
             plydata = PlyData.read(verts_path_ovft)
             box_center = 0.
@@ -144,7 +144,12 @@ class TriPlaneGenerator(torch.nn.Module):
         # normalize to [-0.5, 0.5] and place the center at origin
         verts_norm = verts /box_scale  - box_center
         verts_norm = torch.tensor(verts_norm, dtype=torch.float, device='cuda')
+        # verts_norm[:,1:3] *= -1
+        verts_norm[:,:] *= -1
+        # st()
+        # verts_norm[:,0] *= -1
         self.register_buffer('verts', verts_norm)
+        print(f"self.verts.center:{self.verts.mean(dim=0)}")
         
         
         # load uv coords & gt uv map
@@ -169,80 +174,22 @@ class TriPlaneGenerator(torch.nn.Module):
             c = torch.zeros_like(c)
         return self.backbone.mapping(z, c * self.rendering_kwargs.get('c_scale', 0), truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff, update_emas=update_emas)
 
-    def project3d_to_2d(self, intrinsic_matrix, c2w, fname):
-        import numpy as np 
-        import cv2 
-
-        # Define intrinsic camera parameters 
-        focal_length = 500
-        image_width = 256
-        image_height = 256
-        # intrinsic_matrix = np.array([ 
-        #     [focal_length, 0, image_width/2], 
-        #     [0, focal_length, image_height/2], 
-        #     [0, 0, 1] 
-        # ]) 
-        cam_matrix = intrinsic_matrix.detach().cpu().numpy()
-        cam_matrix[:2] = cam_matrix[:2]*image_height
-        cam_matrix = np.matmul(cam_matrix, c2w.detach().cpu().numpy()[:3])
-        # cam_matrix = cam_matrix_torch.detach().cpu().numpy()
-        # # st()
-
-        # Define extrinsic camera parameters 
-        # rvec = np.array([0, 0, 0], dtype=np.float32) 
-        # tvec = np.array([0, 0, 0], dtype=np.float32).reshape(-1, 1)
-        # rvec = np.zeros((3, 1), np.float32) 
-        # tvec = np.zeros((3, 1), np.float32) 
-
-        # Generate 3D points on a paraboloid 
-        u_range = np.linspace(0, 1, num=40) 
-        v_range = np.linspace(0, 1, num=40) 
-        u, v = np.meshgrid(u_range, v_range) 
-        x = u 
-        y = v 
-        z = u**2 + v**2
-
-        points_3d = np.stack([x, y, z], axis=-1).reshape(-1, 3) 
-
-        # Project 3D points onto 2D plane 
-        # points_2d, _ = cv2.projectPoints(points_3d, 
-        #                                 rvec, tvec, 
-        #                                 cam_matrix, 
-        #                                 None) 
-      
-        points_3d_homo = np.concatenate([points_3d, np.zeros((points_3d.shape[0],1), np.float32)], axis=-1)
-        # st()
-        points_homo = np.matmul(cam_matrix, points_3d_homo.T).T
-        points_2d = points_homo[:,:2] / points_homo[:,2:3]
-        points_2d = points_2d[:,None]
-        # st()
-        # Plot 2D points 
-        img = np.zeros((image_height, image_width), 
-                    dtype=np.uint8) 
-        # st()
-        for point in points_2d.astype(int): 
-            img = cv2.circle(img, tuple(point[0]), 2, 255, -1) 
-            
-        cv2.imwrite(fname, img)
-        print('Saved to ', fname)
-        # if not intrinsic_matrix.sum()==0:
-        #     st()
-        # cv2.imshow('Image', img) 
-        # cv2.waitKey(0) 
-        # cv2.destroyAllWindows() 
     
     def getWorld2View_from_eg3d_c(self, c2w):
-        # print("----getWorld2View_from_eg3d_c!!")
+        # print(f"c2w before:{c2w}")
         c2w[:, :3, 1:3] *= -1 # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+        # print(f"c2w after:{c2w}")
+        
         # transpose the R in c2w
         if not torch.all(c2w==0):
             w2c = torch.linalg.inv(c2w)
         else:
             w2c = torch.zeros_like(c2w)
         
-        batch_R = w2c[:,:3,:3]
-        batch_R_trans = batch_R.transpose(1,2).contiguous()
-        w2c[:,:3,:3] = batch_R_trans
+        # batch_R = w2c[:,:3,:3]
+        # batch_R_trans = batch_R.transpose(1,2).contiguous()
+        # w2c[:,:3,:3] = batch_R_trans
+        # st()
         return w2c
         # return w2c.contiguous() ## if the above have bug, try to make it contiguous
     
@@ -295,13 +242,7 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image = feature_image[:, :3] # rgb: torch.Size([4, 3, 64, 64]), feature_image: torch.Size([4, 32, 64, 64])
             st() # check feature image.shape
             sr_image = self.superresolution(rgb_image, feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
-            
-            # ## debug grad
-            # planes.requires_grad_(True)
-            # planes.register_hook(lambda grad: print_grad("planes.requires_grad", grad))
-            # rgb_image.requires_grad_(True)
-            # rgb_image.register_hook(lambda grad: print_grad("rgb_image.requires_grad", grad))
-            
+         
             ### ----- original eg3d version [END] ----- 
         
         
@@ -312,43 +253,21 @@ class TriPlaneGenerator(torch.nn.Module):
             ## TODO: convert from triplane to 3DMM here, maybe need a net to decode the feature to RGB or SH
             # textures_gen_batch = planes # (4, 96, 256, 256)
             textures_gen_batch = self.text_decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256), range [0,1]
-            
-
-            # textures_gen_batch = planes[:, :48]
-            # textures_gen_batch.requires_grad_(True)
-            # textures_gen_batch.register_hook(lambda grad: print_grad("textures_gen_batch.requires_grad", grad))
-            
+                
             # camera setting 
-            world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix) # (4, 4, 4) 
-            
-            # # replace the hard-coded focal with intrinsics from c
-            # focal = 1015 
-            # focal = intrinsics[0,0,1] * half_image_width * 2 # check
-            # fovy = fovx = 2*torch.arctan(half_image_width/focal)*180./math.pi
-            
-            # TODO: modify z-near and z-far in projection matrix
-            # projection_matrix = getProjectionMatrix(0.01, 50, fovx, fovy).transpose(0, 1)
-            # z_near, z_far = 0.0000001, 10 # TODO: find suitable value for this
-            # projection_matrix = getProjectionMatrix(z_near, z_far, fovx, fovy).transpose(0, 1).to(world_view_transform_batch.device)
+            world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix).transpose(2,1) # (4, 4, 4) 
+    
             rgb_image_batch = []
             
             # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
             for world_view_transform, textures_gen in zip(world_view_transform_batch,textures_gen_batch):
-                # full_proj_transform = world_view_transform @ projection_matrix
-                # self.viewpoint_camera.update_transforms(intrinsics, world_view_transform)
                 self.viewpoint_camera.update_transforms(intrinsics, world_view_transform, direct_fov=overfitting)
 
                 ## TODO: can gaussiam splatting run batch in parallel?
                 textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 96, 1, 5023)
-                # textures.requires_grad_(True) 
-                # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
-                
-                # gaussian.create_from_generated_texture(self.verts, textures)
-                # self.gaussian.create_from_ply2(textures)
-                # st()
-                # self.gaussian.update_texutures(textures)
+               
                 self.gaussian.update_rgb_textures(self.verts_rgb)
-                # st()
+             
                 # raterization
                 white_background = False
                 bg_color = [1,1,1] if white_background else [0, 0, 0]
@@ -357,16 +276,12 @@ class TriPlaneGenerator(torch.nn.Module):
                 _rgb_image = gs_render(self.viewpoint_camera, self.gaussian, None, background)["render"]
                 ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
                 
-                
                 rgb_image_batch.append(_rgb_image[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             ## FIXME: try different normalization method to normalize rgb image to [0,1]
             rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
             # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")
-            
-            # rgb_image.requires_grad_(True)
-            # rgb_image.register_hook(lambda grad: print_grad("rgb_image.requires_grad", grad))
             
             ## TODO: the below superresolution shall be kept?
             ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?
