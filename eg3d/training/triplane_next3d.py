@@ -326,6 +326,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # z_near, z_far = 0.0000001, 10 # TODO: find suitable value for this
             # projection_matrix = getProjectionMatrix(z_near, z_far, fovx, fovy).transpose(0, 1).to(world_view_transform_batch.device)
             rgb_image_batch = []
+            alpha_image_batch = [] # mask
             
             # FIXME: for debug, init gaussians with gt texture
             self.gaussian_debug.update_rgb_textures(self.verts_rgb)
@@ -352,16 +353,19 @@ class TriPlaneGenerator(torch.nn.Module):
                 bg_color = [1,1,1] if white_background else [0, 0, 0]
                 background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
                 
-                _rgb_image = gs_render(self.viewpoint_camera, self.gaussian, None, background)["render"]
+                res = gs_render(self.viewpoint_camera, self.gaussian, None, background)
+                _rgb_image = res["render"]
+                _alpha_image = res["alpha"]
                 ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
                 
-                
                 rgb_image_batch.append(_rgb_image[None])
+                alpha_image_batch.append(_alpha_image[None])
                 
                 _real_image = gs_render(self.viewpoint_camera, self.gaussian_debug, None, background)["render"]
                 real_image_batch.append(_real_image[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
+            alpha_image = torch.cat(alpha_image_batch)
             real_image = torch.cat(real_image_batch)
             ## FIXME: try different normalization method to normalize rgb image to [-1,1]
             rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
@@ -381,11 +385,11 @@ class TriPlaneGenerator(torch.nn.Module):
             
            
             ## TODO: render depth_image. May not explicitly calculated from the face model since its the same for all.
-            depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
+            # depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
             ### ----- gaussian splatting [END] -----
 
         # return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image}
-        return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image, 'image_real': real_image}
+        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image}
     
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
