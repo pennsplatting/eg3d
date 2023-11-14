@@ -238,8 +238,9 @@ class TriPlaneGenerator(torch.nn.Module):
         w2c[:,:3,:3] = batch_R_trans
         return w2c
         # return w2c.contiguous() ## if the above have bug, try to make it contiguous
-    
-    
+
+        
+        return w2c
     
             
     def synthesis(self, ws, c, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):
@@ -313,7 +314,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # textures_gen_batch.register_hook(lambda grad: print_grad("textures_gen_batch.requires_grad", grad))
             
             # camera setting 
-            world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix) # (4, 4, 4) 
+            # world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix) # (4, 4, 4) 
             
             # # replace the hard-coded focal with intrinsics from c
             # focal = 1015 
@@ -331,9 +332,12 @@ class TriPlaneGenerator(torch.nn.Module):
             real_image_batch = []
             
             # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
-            for world_view_transform, textures_gen in zip(world_view_transform_batch,textures_gen_batch):
+            
+            # for world_view_transform, textures_gen in zip(world_view_transform_batch, textures_gen_batch):
+            for _cam2world_matrix, textures_gen in zip(cam2world_matrix, textures_gen_batch):
                 # full_proj_transform = world_view_transform @ projection_matrix
-                self.viewpoint_camera.update_transforms(intrinsics, world_view_transform)
+                # self.viewpoint_camera.update_transforms(intrinsics, world_view_transform)
+                self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
 
                 ## TODO: can gaussiam splatting run batch in parallel?
                 textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 96, 1, 5023)
@@ -344,7 +348,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 # self.gaussian.create_from_ply2(textures)
                 self.gaussian.update_rgb_textures(textures.squeeze().permute(1,0))
                 # raterization
-                white_background = False
+                white_background = True
                 bg_color = [1,1,1] if white_background else [0, 0, 0]
                 background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
                 
