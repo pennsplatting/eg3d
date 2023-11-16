@@ -100,8 +100,8 @@ class TriPlaneGenerator(torch.nn.Module):
             image_size = self.neural_rendering_resolution # chekc
         else:
             image_size = 512 # ffhq: 512, 3dmm: 256
-        # z_near, z_far = 0.01, 100 # TODO: find suitable value for this. 0.01 and 100 for overfitting 3dmm
-        z_near, z_far = 1000, -100 # as in face3d ## NO affect
+        z_near, z_far = 0.01, 100 # TODO: find suitable value for this. 0.01 and 100 for overfitting 3dmm
+        # z_near, z_far = 1000, -100 # as in face3d ## NO affect
         print(f"z_near, z_far: {z_near, z_far}")
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         self.gaussian = GaussianModel(self.sh_degree, self.verts)
@@ -148,6 +148,8 @@ class TriPlaneGenerator(torch.nn.Module):
         verts_norm[:,:] *= -1
         # st()
         # verts_norm[:,0] *= -1
+        print("al change to verts")
+        # st()
         self.register_buffer('verts', verts_norm)
         print(f"self.verts.center:{self.verts.mean(dim=0)}")
         
@@ -176,13 +178,21 @@ class TriPlaneGenerator(torch.nn.Module):
 
     
     def getWorld2View_from_eg3d_c(self, c2w):
+        # c2w[:, 1:3,:] *= -1 # revert back to the face3d c2w
+        # print("revert back to the face3d c2w")
         # print(f"c2w before:{c2w}")
         c2w[:, :3, 1:3] *= -1 # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
         # print(f"c2w after:{c2w}")
+        # c2w[:, :3, 1:] *= -1 
+        # print("also convert the camera pose to minus")
         
         # transpose the R in c2w
         if not torch.all(c2w==0):
             w2c = torch.linalg.inv(c2w)
+            print("exchange w2c yz")
+            w2c[:, 1:3] = torch.stack([w2c[:, 2],  w2c[:, 1]], dim=1)
+            # st()
+
         else:
             w2c = torch.zeros_like(c2w)
         
