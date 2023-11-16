@@ -172,8 +172,9 @@ def training_loop(
     # Print network summary tables.
     if rank == 0:
         z = torch.empty([batch_gpu, G.z_dim], device=device)
+        z_bg = torch.empty([batch_gpu, G.z_dim], device=device)
         c = torch.empty([batch_gpu, G.c_dim], device=device)
-        img = misc.print_module_summary(G, [z, c])
+        img = misc.print_module_summary(G, [z, z_bg, c])
         misc.print_module_summary(D, [img, c])
 
     # Setup augmentation.
@@ -223,12 +224,14 @@ def training_loop(
     # Export sample images.
     grid_size = None
     grid_z = None
+    grid_z_bg = None
     grid_c = None
     if rank == 0:
         print('Exporting sample images...')
         grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
         save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
+        grid_z_bg = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
 
     # Initialize logs.
@@ -267,12 +270,14 @@ def training_loop(
             phase_real_c = phase_real_c.to(device).split(batch_gpu)
             all_gen_z = torch.randn([len(phases) * batch_size, G.z_dim], device=device)
             all_gen_z = [phase_gen_z.split(batch_gpu) for phase_gen_z in all_gen_z.split(batch_size)]
+            all_gen_z_bg = torch.randn([len(phases) * batch_size, G.z_dim], device=device)
+            all_gen_z_bg = [phase_gen_z_bg.split(batch_gpu) for phase_gen_z_bg in all_gen_z_bg.split(batch_size)]
             all_gen_c = [training_set.get_label(np.random.randint(len(training_set))) for _ in range(len(phases) * batch_size)]
             all_gen_c = torch.from_numpy(np.stack(all_gen_c)).pin_memory().to(device)
             all_gen_c = [phase_gen_c.split(batch_gpu) for phase_gen_c in all_gen_c.split(batch_size)]
 
         # Execute training phases.
-        for phase, phase_gen_z, phase_gen_c in zip(phases, all_gen_z, all_gen_c):
+        for phase, phase_gen_z, phase_gen_z_bg, phase_gen_c in zip(phases, all_gen_z, all_gen_z_bg, all_gen_c):
             if batch_idx % phase.interval != 0:
                 continue
             if phase.start_event is not None:
@@ -281,10 +286,10 @@ def training_loop(
             # Accumulate gradients.
             phase.opt.zero_grad(set_to_none=True)
             phase.module.requires_grad_(True)
-            for real_img, real_c, gen_z, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c):
-                # loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg)
+            for real_img, real_c, gen_z, gen_z_bg, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_z_bg, phase_gen_c):
+                loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_z_bg=gen_z_bg, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg)
                 # FIXME: for debug
-                loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=real_img, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
+                # loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=real_img, gen_z=gen_z, gen_z_bg=gen_z_bg, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
             phase.module.requires_grad_(False)
 
             # Update weights.
@@ -361,7 +366,7 @@ def training_loop(
 
         # Save image snapshot.
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
-            out = [G_ema(z=z, c=c, noise_mode='const') for z, c in zip(grid_z, grid_c)]
+            out = [G_ema(z=z, z_bg=z_bg, c=c, noise_mode='const') for z, z_bg, c in zip(grid_z, grid_z_bg, grid_c)]
             images = torch.cat([o['image'].cpu() for o in out]).detach().numpy()
             images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
             images_mask = -torch.cat([o['image_mask'].cpu() for o in out]).detach().numpy()
@@ -372,8 +377,8 @@ def training_loop(
             save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
             
             # FIXME: save ply and see if the texture is well optimized
-            G_ema.gaussian_debug.save_ply("./gt_3dmm.ply")
-            G_ema.gaussian.save_ply("./fake_3dmm.ply")
+            # G_ema.gaussian_debug.save_ply("./gt_3dmm.ply")
+            # G_ema.gaussian.save_ply("./fake_3dmm.ply")
             #--------------------
             # # Log forward-conditioned images
 

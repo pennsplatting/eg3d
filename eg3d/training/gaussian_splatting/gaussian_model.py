@@ -216,7 +216,7 @@ class GaussianModel:
         # print(f"--shs: min={shs.min()}, max={shs.max()}, mean={shs.mean()}, shape={shs.shape}")
         # features = torch.zeros((xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
         ## FIXME: although all features are mapped from RGB[0,1] to SH now, the original GS uses 0 for self._feature_rest
-        features = RGB2SH(features) # (53215, 3)
+        # features = RGB2SH(features) # (53215, 3)
         # features[:, 3:, 1:] = 0.0
 
         # self.active_sh_degree = self.max_sh_degree
@@ -228,8 +228,8 @@ class GaussianModel:
         rots = torch.zeros((self._xyz.shape[0], 4), device="cuda")
         rots[:, 0] = 1
 
-        opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
-        # opacities = torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda")
+        # opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
+        opacities = torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda")
 
         # self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(False))
         self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True)
