@@ -81,6 +81,7 @@ class MiniCam(nn.Module):
     def update_transforms(self, intrinsics, world_view_transform, device=None):
         # intrinsics = c[:, 16:25].view(-1, 3, 3)
         focal = intrinsics[0,0,1] * self.image_width # check
+        # focal = intrinsics[0,0,0] * self.image_width # check
         fov = 2*torch.arctan(self.image_width/2/focal)*180./math.pi
         self.FoVx = self.FoVy = fov
         self.projection_matrix = getProjectionMatrix(self.znear, self.zfar, self.FoVx, self.FoVy).transpose(0, 1).to(world_view_transform.device)
@@ -92,6 +93,21 @@ class MiniCam(nn.Module):
         else:
             view_inv = self.world_view_transform
         self.camera_center = view_inv[3][:3]
+        
+    def update_transforms2(self, intrinsics, c2w, device=None):
+        # intrinsics are normalized by image size, rather than in pixel units
+        self.FoVx = 2*torch.arctan(1/(2*intrinsics[0,0,0]))
+        self.FoVy = 2*torch.arctan(1/(2*intrinsics[0,1,1]))
+        self.projection_matrix = getProjectionMatrix(self.znear, self.zfar, self.FoVx, self.FoVy).transpose(0, 1).to(c2w.device)
+        
+        if not torch.all(c2w==0): 
+            w2c = torch.inverse(c2w) 
+        else:
+            w2c = c2w
+        
+        self.world_view_transform = w2c.transpose(0, 1)
+        self.full_proj_transform = self.world_view_transform @ self.projection_matrix
+        self.camera_center = c2w[:3,3]
 
 ## TODO: implement inheritance
 # class MiniCam2(MiniCam):

@@ -88,7 +88,7 @@ class StyleGAN2Loss(Loss):
         logits = self.D(img, c, update_emas=update_emas)
         return logits
 
-    # TODO: L1 loss for debug
+    # TODO: L2 loss for debug
     def accumulate_gradients_debug(self, phase, real_img, real_c, gen_z, gen_c, gain, cur_nimg):
         assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth']
         if self.G.rendering_kwargs.get('density_reg', 0) == 0:
@@ -99,7 +99,7 @@ class StyleGAN2Loss(Loss):
         r1_gamma = self.r1_gamma
 
         alpha = min(cur_nimg / (self.gpc_reg_fade_kimg * 1e3), 1) if self.gpc_reg_fade_kimg > 0 else 1
-        swapping_prob = (1 - alpha) * 1 + alpha * self.gpc_reg_prob if self.gpc_reg_prob is not None else None
+        swapping_prob = (1 - alpha) * 1 + alpha * self.gpc_reg_prob if self.gpc_reg_prob is not None else None       
         
         if self.neural_rendering_resolution_final is not None:
             alpha = min(cur_nimg / (self.neural_rendering_resolution_fade_kimg * 1e3), 1)
@@ -107,9 +107,22 @@ class StyleGAN2Loss(Loss):
         else:
             neural_rendering_resolution = self.neural_rendering_resolution_initial
             
-        gen_img, _gen_ws = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
-        loss = torch.nn.functional.l1_loss(real_img, gen_img)
-        loss.backward()
+        with torch.autograd.profiler.record_function('Gmain_forward'):
+            gen_img, _gen_ws = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
+            loss = torch.nn.functional.mse_loss(gen_img["image_real"], gen_img["image"])
+        with torch.autograd.profiler.record_function('Gmain_backward'):
+            loss.backward()
+            
+        ## FIXME: debug grad
+        # print(f"Gradients for self.G -----begin---")
+        # for name, param in self.G.named_parameters():
+        #     # print(f" {name}") # not including gaussian and minicam
+        #     if param.grad is not None:
+        #         print(f"Gradients for {name} have been computed.")
+        #     else:
+        #         pass
+        #         # print(f"Gradients for {name} have NOT been computed!!")
+        # print(f"Gradients for self.G -----end---")
         
     def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, gain, cur_nimg):
         assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth']

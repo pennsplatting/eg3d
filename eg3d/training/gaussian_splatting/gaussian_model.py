@@ -16,7 +16,7 @@ from torch import nn
 import os
 from training.gaussian_splatting.utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
-from training.gaussian_splatting.utils.sh_utils import RGB2SH
+from training.gaussian_splatting.utils.sh_utils import RGB2SH, SH2RGB
 # from training.gaussian_splatting.submodules.simple_knn._C import distCUDA2
 from simple_knn._C import distCUDA2
 from training.gaussian_splatting.utils.graphics_utils import BasicPointCloud
@@ -206,7 +206,7 @@ class GaussianModel:
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
     
     # for test
-    def update_texutures(self, feature_uv):
+    def update_textures(self, feature_uv):
         N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
         features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
         # print(f"--shs: min={shs.min()}, max={shs.max()}, mean={shs.mean()}, shape={shs.shape}")
@@ -267,7 +267,7 @@ class GaussianModel:
     def construct_list_of_attributes(self):
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
         # All channels except the 3 DC
-        for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]):
+        for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]): # V, 3, 16
             l.append('f_dc_{}'.format(i))
         for i in range(self._features_rest.shape[1]*self._features_rest.shape[2]):
             l.append('f_rest_{}'.format(i))
@@ -295,6 +295,22 @@ class GaussianModel:
         attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
+        
+        # FIXME: output 3dmm ply, see if the color is right
+        vertex = np.empty(xyz.shape[0], dtype=[('x', 'f4'), ('y', 'f4'),('z', 'f4')])
+        vertex[:] = list(map(tuple, xyz))
+        colors = np.empty(f_dc.shape[0], dtype=[('red', 'u1'), ('green', 'u1'),('blue', 'u1')])
+        colors[:] = list(map(tuple, SH2RGB(f_dc)*255))
+        
+        vertex_all = np.empty(xyz.shape[0], vertex.dtype.descr + colors.dtype.descr)
+        for prop in vertex.dtype.names:
+            vertex_all[prop] = vertex[prop]
+
+        for prop in colors.dtype.names:
+            vertex_all[prop] = colors[prop]
+        # color = PlyElement.describe(colors, 'color')
+        # el = PlyElement.describe(vertex, 'vertex')
+        el = PlyElement.describe(vertex_all, 'vertex')
         PlyData([el]).write(path)
 
     def reset_opacity(self):
