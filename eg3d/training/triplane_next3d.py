@@ -12,21 +12,17 @@ import torch
 from torch_utils import persistence
 from training.networks_stylegan2 import Generator as StyleGAN2Backbone
 from training.volumetric_rendering.renderer import ImportanceRenderer
-# from training.volumetric_rendering.renderer_3dmm import ImportanceRenderer ##replace with splatting renderer later
-from training.volumetric_rendering.renderer_next3d import Pytorch3dRasterizer, face_vertices, generate_triangles, transform_points, batch_orth_proj, angle2matrix
 from training.volumetric_rendering.ray_sampler import RaySampler
 import dnnlib
 
 from ipdb import set_trace as st
 import cv2
 import torch.nn as nn
-from pytorch3d.io import load_obj
 import torch.nn.functional as F
 
 from training.gaussian_splatting.gaussian_model import GaussianModel
 from training.gaussian_splatting.cameras import MiniCam
 from training.gaussian_splatting.renderer import render as gs_render
-from pytorch3d.renderer import look_at_view_transform
 from training.gaussian_splatting.utils.graphics_utils import getWorld2View, getProjectionMatrix
 import numpy as np
 
