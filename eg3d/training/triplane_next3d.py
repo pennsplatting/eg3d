@@ -352,6 +352,7 @@ class TriPlaneGenerator(torch.nn.Module):
             real_image = torch.cat(real_image_batch)
             ## FIXME: try different normalization method to normalize rgb image to [-1,1]
             rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
+    
             
             ## TODO: the below superresolution shall be kept?
             ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?

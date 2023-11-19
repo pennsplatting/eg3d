@@ -30,6 +30,9 @@ eg3d/results
 eg3d_results
 eg3d/~
 
+# submodules
+dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/
+
 #data
 *.zip
 
@@ -39,4 +42,3 @@ eg3d/~
 #debug
 proj*
 .vscode
-
