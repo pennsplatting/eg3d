@@ -31,6 +31,13 @@ from camera_utils import LookAtPoseSampler
 from training.crosssection_utils import sample_cross_section
 
 from ipdb import set_trace as st
+
+from training.face_parsing_model import BiSeNet
+import cv2
+import os.path as osp
+from PIL import Image
+import torchvision.transforms as transforms
+
 #----------------------------------------------------------------------------
 
 def setup_snapshot_image_grid(training_set, random_seed=0):
@@ -90,6 +97,128 @@ def save_image_grid(img, fname, drange, grid_size):
         PIL.Image.fromarray(img[:, :, 0], 'L').save(fname)
     if C == 3:
         PIL.Image.fromarray(img, 'RGB').save(fname)
+        
+#----------------------------------------------------------------------------
+
+def vis_parsing_maps(im, parsing_anno, stride, save_im=False, save_path='vis_results/parsing_map_on_im.jpg'):
+    # Colors for all 20 parts
+    atts = ['skin', 'l_brow', 'r_brow', 'l_eye', 'r_eye', 'eye_g', 'l_ear', 'r_ear', 'ear_r',
+                'nose', 'mouth', 'u_lip', 'l_lip', 'neck', 'neck_l', 'cloth', 'hair', 'hat',
+                'background']
+    
+    # atts = [1 'skin', 2 'l_brow', 3 'r_brow', 4 'l_eye', 5 'r_eye', 6 'eye_g', 7 'l_ear', 8 'r_ear', 9 'ear_r',
+    #                 10 'nose', 11 'mouth', 12 'u_lip', 13 'l_lip', 14 'neck', 15 'neck_l', 16 'cloth', 17 'hair', 18 'hat']
+    use_part_colors_dicts = True
+    if not use_part_colors_dicts:
+        part_colors = [[255, 0, 0], [255, 85, 0], [255, 170, 0],
+                    [255, 0, 85], [255, 0, 170],
+                    [0, 255, 0], [85, 255, 0], [170, 255, 0],
+                    [0, 255, 85], [0, 255, 170],
+                    [0, 0, 255], [85, 0, 255], [170, 0, 255],
+                    [0, 85, 255], [0, 170, 255],
+                    [255, 255, 0], [255, 255, 85], [255, 255, 170],
+                    [255, 0, 255], [255, 85, 255], [255, 170, 255],
+                    [0, 255, 255], [85, 255, 255], [170, 255, 255]]
+        part_colors_dict = {atts[i] if i < (len(atts)) else f'others_{i}':part_colors[i] for i in range(len(part_colors))}
+    
+    else:
+        ## the part_colors_dict is derived from the above lines of codes
+        part_colors_dict = {'skin': [255, 0, 0], 'l_brow': [255, 85, 0], 'r_brow': [255, 170, 0], 'l_eye': [255, 0, 85], 'r_eye': [255, 0, 170], 'eye_g': [0, 255, 0], 'l_ear': [85, 255, 0], 'r_ear': [170, 255, 0], 'ear_r': [0, 255, 85], 'nose': [0, 255, 170], 'mouth': [0, 0, 255], 'u_lip': [85, 0, 255], 'l_lip': [170, 0, 255], 'neck': [0, 85, 255], 'neck_l': [0, 170, 255], 'cloth': [255, 255, 0], 'hair': [255, 255, 85], 'hat': [255, 255, 170], 'background': [255, 0, 255], 'others_19': [255, 85, 255], 'others_20': [255, 170, 255], 'others_21': [0, 255, 255], 'others_22': [85, 255, 255], 'others_23': [170, 255, 255]}
+        ## group the color of parts
+        face_parts = ['skin', 'l_brow', 'r_brow', 'l_eye', 'r_eye', 'eye_g', 'l_ear', 'r_ear', 'ear_r',
+                'nose', 'mouth', 'u_lip', 'l_lip','neck', 'neck_l'] # this neck is actually lip!! the neck_l is the real neck
+        face_parts_color = part_colors_dict['skin']
+        for fp in face_parts:
+            part_colors_dict[fp]=face_parts_color
+        
+
+    # ... (existing code)
+    im = np.array(im) # im: PIL image
+    vis_im = im.copy().astype(np.uint8)
+    vis_parsing_anno = parsing_anno.copy().astype(np.uint8)
+    vis_parsing_anno = cv2.resize(vis_parsing_anno, None, fx=stride, fy=stride, interpolation=cv2.INTER_NEAREST)
+    vis_parsing_anno_color = np.zeros((vis_parsing_anno.shape[0], vis_parsing_anno.shape[1], 3)) + 255
+
+    num_of_class = np.max(vis_parsing_anno)
+
+    for pi in range(1, num_of_class + 1):
+        index = np.where(vis_parsing_anno == pi)
+        # assert part_colors[pi] == part_colors_dict[atts[pi]]
+        if not use_part_colors_dicts:
+            vis_parsing_anno_color[index[0], index[1], :] = part_colors[pi]
+        else:
+            vis_parsing_anno_color[index[0], index[1], :] = part_colors_dict[atts[pi]]
+
+    # mask = (vis_parsing_anno_color==face_parts_color)
+    mask = np.all(vis_parsing_anno_color == np.array(face_parts_color), axis=-1)
+
+    return torch.from_numpy(mask)
+    
+    vis_parsing_anno_color = vis_parsing_anno_color.astype(np.uint8)
+    # print(vis_parsing_anno_color.shape, vis_im.shape)
+    vis_im = cv2.addWeighted(cv2.cvtColor(vis_im, cv2.COLOR_RGB2BGR), 0.4, vis_parsing_anno_color, 0.6, 0)
+
+    # Save result or not
+    if save_im:
+        cv2.imwrite(save_path[:-4] +'.png', vis_parsing_anno)
+        print(f"Save path:{save_path}")
+        cv2.imwrite(save_path, vis_im, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
+    
+    vis_im_tensor = torch.from_numpy(vis_im.astype(im.dtype)) #.to(im_tensor.device)
+
+    return torch.from_numpy(mask)
+
+#----------------------------------------------------------------------------
+def get_face_mask(real_img, type='torch'):
+    
+    if isinstance(real_img, np.ndarray):
+        type='numpy'
+        original_dtype = real_img.dtype
+        real_img=torch.tensor(real_img).cuda().float()
+    
+    bg_color = 255 if real_img.max().item() > 1 else 1 # white bg as GS 
+    ## TODO: unify the bg parameters with GS
+    
+  
+    # Define the normalization parameters, applies to image of range in both [-1,1] and [0,255]
+    mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).cuda()
+    std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).cuda()
+    
+    # Normalize the entire batch in a vectorized manner
+    normalized_batch = (real_img/real_img.max() - mean) / std
+  
+    
+    ##### use segmentation mask to keep only the facial part of the real image
+    with torch.no_grad():
+        real_img_masked_batch = []
+        for _img in normalized_batch:
+            
+            img = torch.unsqueeze(_img, 0) # img: [1, 3, 512, 512]
+            
+            out = net(img)[0] # out: [1, 19, 512, 512]
+            parsing = out.squeeze(0).cpu().numpy().argmax(0) # parsing: (512, 512)
+            # print(np.unique(parsing))
+          
+            tensor_to_pil = transforms.ToPILImage()
+            _img = tensor_to_pil(_img)          
+
+            # img_save_pth = os.path.join(run_dir, f'reals_masked{cur_nimg//1000:06d}.png')
+            # img_save_pth = f'reals_masked{1000:06d}.png'
+            img_save_pth = None
+            real_img_masked = vis_parsing_maps(_img, parsing, stride=1, save_im=True, save_path=img_save_pth)
+            
+            real_img_masked_batch.append(real_img_masked.unsqueeze(0))
+    real_img_mask_batch = torch.cat(real_img_masked_batch).to(real_img.device).to(torch.float)[:,None]
+    real_img_masked_batch = real_img * real_img_mask_batch + bg_color * (1-real_img_mask_batch)
+    assert real_img_masked_batch.shape == real_img.shape
+    
+    if type=='numpy':
+        # real_img=real_img.cpu().numpy().astype(original_dtype)
+        real_img_masked_batch = real_img_masked_batch.cpu().numpy().astype(original_dtype)
+        
+    return real_img_masked_batch
+    
+    
 
 #----------------------------------------------------------------------------
 
@@ -195,6 +324,27 @@ def training_loop(
             for param in misc.params_and_buffers(module):
                 if param.numel() > 0 and num_gpus > 1:
                     torch.distributed.broadcast(param, src=0)
+    
+    ## -------------------------- choose what loss to use --------------------------
+    loss_modes = ['original', 'overfit', 'conditional', 'mask_real_face']
+    loss_choice = loss_modes[-1]
+    print(f"Your choice of loss function is: {loss_choice}")
+    ## -------------------------- plug in the BiSeNet for face segmentation -------------------------- 
+
+    # evaluate():
+    global net
+    ## TODO: move this to dataloader to accelerate training
+    if loss_choice == 'mask_real_face':
+        n_classes = 19
+        net = BiSeNet(n_classes=n_classes)
+        net.cuda()
+        # save_pth = osp.join('res/cp', cp)
+        save_pth = '/home/xuyimeng/Repo/face-parsing.PyTorch/res/cp/79999_iter.pth'
+        net.load_state_dict(torch.load(save_pth))
+        net.eval()
+    
+    ##### --------------------------
+
 
     # Setup training phases.
     if rank == 0:
@@ -227,7 +377,10 @@ def training_loop(
     if rank == 0:
         print('Exporting sample images...')
         grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
+
+        images_masked = get_face_mask(images, type='numpy')
         save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
+        save_image_grid(images_masked, os.path.join(run_dir, 'reals_masked.png'), drange=[0,255], grid_size=grid_size)
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
 
@@ -258,6 +411,8 @@ def training_loop(
     batch_idx = 0
     if progress_fn is not None:
         progress_fn(0, total_kimg)
+        
+    
     while True:
 
         # Fetch training data.
@@ -281,10 +436,22 @@ def training_loop(
             # Accumulate gradients.
             phase.opt.zero_grad(set_to_none=True)
             phase.module.requires_grad_(True)
+            
             for real_img, real_c, gen_z, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c):
-                # loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg)
-                # FIXME: for debug
-                loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=real_img, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
+                if loss_choice == 'original':
+                    loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg)
+                elif loss_choice == 'overfit':
+                    loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=real_img, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
+                # elif loss_choice == 'conditional': # TODO: not develop this part yet
+                #     loss.accumulate_gradients_conditionalD(phase=phase.name, real_c=real_c, real_img=real_img, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
+                elif loss_choice == 'mask_real_face':
+                    ##### use segmentation mask to keep only the facial part of the real image
+                    real_img_masked_batch = get_face_mask(real_img) 
+                    # save_image_grid(real_img_masked_batch.cpu().numpy(), os.path.join(run_dir, f'debug{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=(2,2))
+                    loss.accumulate_gradients(phase=phase.name, real_c=real_c, real_img=real_img_masked_batch, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
+                else:
+                    print(f"Invalid loss choice, please choose from [{loss_modes}]")
+                    
             phase.module.requires_grad_(False)
 
             # Update weights.

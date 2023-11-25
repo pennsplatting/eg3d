@@ -18,6 +18,7 @@ from torch_utils.ops import upfirdn2d
 from training.dual_discriminator import filtered_resizing
 
 from pdb import set_trace as st
+
 #----------------------------------------------------------------------------
 
 class Loss:
@@ -341,3 +342,169 @@ class StyleGAN2Loss(Loss):
                 (loss_Dreal + loss_Dr1).mean().mul(gain).backward()
 
 #----------------------------------------------------------------------------
+
+    def vis_parsing_maps(im, parsing_anno, stride, save_im=False, save_path='vis_results/parsing_map_on_im.jpg'):
+        # Colors for all 20 parts
+        atts = ['skin', 'l_brow', 'r_brow', 'l_eye', 'r_eye', 'eye_g', 'l_ear', 'r_ear', 'ear_r',
+                    'nose', 'mouth', 'u_lip', 'l_lip', 'neck', 'neck_l', 'cloth', 'hair', 'hat',
+                    'background']
+        
+        # atts = [1 'skin', 2 'l_brow', 3 'r_brow', 4 'l_eye', 5 'r_eye', 6 'eye_g', 7 'l_ear', 8 'r_ear', 9 'ear_r',
+        #                 10 'nose', 11 'mouth', 12 'u_lip', 13 'l_lip', 14 'neck', 15 'neck_l', 16 'cloth', 17 'hair', 18 'hat']
+        use_part_colors_dicts = True
+        if not use_part_colors_dicts:
+            part_colors = [[255, 0, 0], [255, 85, 0], [255, 170, 0],
+                        [255, 0, 85], [255, 0, 170],
+                        [0, 255, 0], [85, 255, 0], [170, 255, 0],
+                        [0, 255, 85], [0, 255, 170],
+                        [0, 0, 255], [85, 0, 255], [170, 0, 255],
+                        [0, 85, 255], [0, 170, 255],
+                        [255, 255, 0], [255, 255, 85], [255, 255, 170],
+                        [255, 0, 255], [255, 85, 255], [255, 170, 255],
+                        [0, 255, 255], [85, 255, 255], [170, 255, 255]]
+            part_colors_dict = {atts[i] if i < (len(atts)) else f'others_{i}':part_colors[i] for i in range(len(part_colors))}
+        
+        else:
+            ## the part_colors_dict is derived from the above lines of codes
+            part_colors_dict = {'skin': [255, 0, 0], 'l_brow': [255, 85, 0], 'r_brow': [255, 170, 0], 'l_eye': [255, 0, 85], 'r_eye': [255, 0, 170], 'eye_g': [0, 255, 0], 'l_ear': [85, 255, 0], 'r_ear': [170, 255, 0], 'ear_r': [0, 255, 85], 'nose': [0, 255, 170], 'mouth': [0, 0, 255], 'u_lip': [85, 0, 255], 'l_lip': [170, 0, 255], 'neck': [0, 85, 255], 'neck_l': [0, 170, 255], 'cloth': [255, 255, 0], 'hair': [255, 255, 85], 'hat': [255, 255, 170], 'background': [255, 0, 255], 'others_19': [255, 85, 255], 'others_20': [255, 170, 255], 'others_21': [0, 255, 255], 'others_22': [85, 255, 255], 'others_23': [170, 255, 255]}
+            ## group the color of parts
+            face_parts = ['skin', 'l_brow', 'r_brow', 'l_eye', 'r_eye', 'eye_g', 'l_ear', 'r_ear', 'ear_r',
+                    'nose', 'mouth', 'u_lip', 'l_lip','neck'] # this neck is actually lip!! the neck_l is the real neck
+            face_parts_color = part_colors_dict['skin']
+            for fp in face_parts:
+                part_colors_dict[fp]=face_parts_color
+            
+
+        im = np.array(im)
+        vis_im = im.copy().astype(np.uint8)
+        vis_parsing_anno = parsing_anno.copy().astype(np.uint8)
+        vis_parsing_anno = cv2.resize(vis_parsing_anno, None, fx=stride, fy=stride, interpolation=cv2.INTER_NEAREST)
+        vis_parsing_anno_color = np.zeros((vis_parsing_anno.shape[0], vis_parsing_anno.shape[1], 3)) + 255
+
+        num_of_class = np.max(vis_parsing_anno)
+
+        for pi in range(1, num_of_class + 1):
+            index = np.where(vis_parsing_anno == pi)
+            # assert part_colors[pi] == part_colors_dict[atts[pi]]
+            if not use_part_colors_dicts:
+                vis_parsing_anno_color[index[0], index[1], :] = part_colors[pi]
+            else:
+                vis_parsing_anno_color[index[0], index[1], :] = part_colors_dict[atts[pi]]
+
+        vis_parsing_anno_color = vis_parsing_anno_color.astype(np.uint8)
+        # print(vis_parsing_anno_color.shape, vis_im.shape)
+        vis_im = cv2.addWeighted(cv2.cvtColor(vis_im, cv2.COLOR_RGB2BGR), 0.4, vis_parsing_anno_color, 0.6, 0)
+
+        # Save result or not
+        if save_im:
+            cv2.imwrite(save_path[:-4] +'.png', vis_parsing_anno)
+            print(f"Save path:{save_path}")
+            cv2.imwrite(save_path, vis_im, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
+
+        # return vis_im
+
+    def accumulate_gradients_mask_real_face(self, phase, real_img, real_c, gen_z, gen_c, gain, cur_nimg):
+            # the real_img is already masked, keeping only the facial area
+            assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth']
+            if self.G.rendering_kwargs.get('density_reg', 0) == 0:
+                phase = {'Greg': 'none', 'Gboth': 'Gmain'}.get(phase, phase)
+            if self.r1_gamma == 0:
+                phase = {'Dreg': 'none', 'Dboth': 'Dmain'}.get(phase, phase)
+            blur_sigma = max(1 - cur_nimg / (self.blur_fade_kimg * 1e3), 0) * self.blur_init_sigma if self.blur_fade_kimg > 0 else 0
+            r1_gamma = self.r1_gamma
+
+            alpha = min(cur_nimg / (self.gpc_reg_fade_kimg * 1e3), 1) if self.gpc_reg_fade_kimg > 0 else 1
+            swapping_prob = (1 - alpha) * 1 + alpha * self.gpc_reg_prob if self.gpc_reg_prob is not None else None
+
+            if self.neural_rendering_resolution_final is not None:
+                alpha = min(cur_nimg / (self.neural_rendering_resolution_fade_kimg * 1e3), 1)
+                neural_rendering_resolution = int(np.rint(self.neural_rendering_resolution_initial * (1 - alpha) + self.neural_rendering_resolution_final * alpha))
+            else:
+                neural_rendering_resolution = self.neural_rendering_resolution_initial
+
+           
+            real_img_raw = filtered_resizing(real_img, size=neural_rendering_resolution, f=self.resample_filter, filter_mode=self.filter_mode)
+
+            if self.blur_raw_target:
+                blur_size = np.floor(blur_sigma * 3)
+                if blur_size > 0:
+                    f = torch.arange(-blur_size, blur_size + 1, device=real_img_raw.device).div(blur_sigma).square().neg().exp2()
+                    real_img_raw = upfirdn2d.filter2d(real_img_raw, f / f.sum())
+
+            real_img = {'image': real_img, 'image_raw': real_img_raw} # no loss is calculated based on depth 
+
+            # Gmain: Maximize logits for generated images.
+            if phase in ['Gmain', 'Gboth']:
+                with torch.autograd.profiler.record_function('Gmain_forward'):
+                    gen_img, _gen_ws = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
+                    gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
+                    training_stats.report('Loss/scores/fake', gen_logits)
+                    training_stats.report('Loss/signs/fake', gen_logits.sign())
+                    loss_Gmain = torch.nn.functional.softplus(-gen_logits)
+                    training_stats.report('Loss/G/loss', loss_Gmain)
+                with torch.autograd.profiler.record_function('Gmain_backward'):
+                    loss_Gmain.mean().mul(gain).backward()
+                    
+                #     ## FIXME: debug grad
+                #     print(f"Gradients for self.G -----begin---")
+                #     for name, param in self.G.named_parameters():
+                #         # print(f" {name}") # not including gaussian and minicam
+                #         if param.grad is not None:
+                #             print(f"Gradients for {name} have been computed.")
+                #         else:
+                #             pass
+                #             # print(f"Gradients for {name} have NOT been computed!!")
+                #     print(f"Gradients for self.G -----end---")
+                # st()
+                    
+            # Dmain: Minimize logits for generated images.
+            loss_Dgen = 0
+            if phase in ['Dmain', 'Dboth']:
+                with torch.autograd.profiler.record_function('Dgen_forward'):
+                    gen_img, _gen_ws = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution, update_emas=True)
+                    gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma, update_emas=True)
+                    training_stats.report('Loss/scores/fake', gen_logits)
+                    training_stats.report('Loss/signs/fake', gen_logits.sign())
+                    loss_Dgen = torch.nn.functional.softplus(gen_logits)
+                with torch.autograd.profiler.record_function('Dgen_backward'):
+                    loss_Dgen.mean().mul(gain).backward()
+
+            # Dmain: Maximize logits for real images.
+            # Dr1: Apply R1 regularization.
+            if phase in ['Dmain', 'Dreg', 'Dboth']:
+                name = 'Dreal' if phase == 'Dmain' else 'Dr1' if phase == 'Dreg' else 'Dreal_Dr1'
+                with torch.autograd.profiler.record_function(name + '_forward'):
+                    real_img_tmp_image = real_img['image'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
+                    real_img_tmp_image_raw = real_img['image_raw'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
+                    real_img_tmp = {'image': real_img_tmp_image, 'image_raw': real_img_tmp_image_raw}
+
+                    real_logits = self.run_D(real_img_tmp, real_c, blur_sigma=blur_sigma)
+                    training_stats.report('Loss/scores/real', real_logits)
+                    training_stats.report('Loss/signs/real', real_logits.sign())
+
+                    loss_Dreal = 0
+                    if phase in ['Dmain', 'Dboth']:
+                        loss_Dreal = torch.nn.functional.softplus(-real_logits)
+                        training_stats.report('Loss/D/loss', loss_Dgen + loss_Dreal)
+
+                    loss_Dr1 = 0
+                    if phase in ['Dreg', 'Dboth']:
+                        if self.dual_discrimination:
+                            with torch.autograd.profiler.record_function('r1_grads'), conv2d_gradfix.no_weight_gradients():
+                                r1_grads = torch.autograd.grad(outputs=[real_logits.sum()], inputs=[real_img_tmp['image'], real_img_tmp['image_raw']], create_graph=True, only_inputs=True)
+                                r1_grads_image = r1_grads[0]
+                                r1_grads_image_raw = r1_grads[1]
+                            r1_penalty = r1_grads_image.square().sum([1,2,3]) + r1_grads_image_raw.square().sum([1,2,3])
+                        else: # single discrimination
+                            with torch.autograd.profiler.record_function('r1_grads'), conv2d_gradfix.no_weight_gradients():
+                                r1_grads = torch.autograd.grad(outputs=[real_logits.sum()], inputs=[real_img_tmp['image']], create_graph=True, only_inputs=True)
+                                r1_grads_image = r1_grads[0]
+                            r1_penalty = r1_grads_image.square().sum([1,2,3])
+                        loss_Dr1 = r1_penalty * (r1_gamma / 2)
+                        training_stats.report('Loss/r1_penalty', r1_penalty)
+                        training_stats.report('Loss/D/reg', loss_Dr1)
+
+                with torch.autograd.profiler.record_function(name + '_backward'):
+                    (loss_Dreal + loss_Dr1).mean().mul(gain).backward()
+
+    #----------------------------------------------------------------------------
