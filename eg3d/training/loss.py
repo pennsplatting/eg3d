@@ -138,13 +138,15 @@ class StyleGAN2Loss(Loss):
         swapping_prob = (1 - alpha) * 1 + alpha * self.gpc_reg_prob if self.gpc_reg_prob is not None else None
 
         if self.neural_rendering_resolution_final is not None:
+            st()
             alpha = min(cur_nimg / (self.neural_rendering_resolution_fade_kimg * 1e3), 1)
             neural_rendering_resolution = int(np.rint(self.neural_rendering_resolution_initial * (1 - alpha) + self.neural_rendering_resolution_final * alpha))
         else:
             neural_rendering_resolution = self.neural_rendering_resolution_initial
 
         real_img_raw = filtered_resizing(real_img, size=neural_rendering_resolution, f=self.resample_filter, filter_mode=self.filter_mode)
-
+        # torch.Size([4, 3, 512, 512])
+        
         if self.blur_raw_target:
             blur_size = np.floor(blur_sigma * 3)
             if blur_size > 0:
@@ -311,6 +313,7 @@ class StyleGAN2Loss(Loss):
                 real_img_tmp_image = real_img['image'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
                 real_img_tmp_image_raw = real_img['image_raw'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
                 real_img_tmp = {'image': real_img_tmp_image, 'image_raw': real_img_tmp_image_raw}
+                # st()
 
                 real_logits = self.run_D(real_img_tmp, real_c, blur_sigma=blur_sigma)
                 training_stats.report('Loss/scores/real', real_logits)

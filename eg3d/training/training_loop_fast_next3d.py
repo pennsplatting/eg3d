@@ -326,7 +326,7 @@ def training_loop(
                     torch.distributed.broadcast(param, src=0)
     
     ## -------------------------- choose what loss to use --------------------------
-    loss_modes = ['original', 'overfit', 'conditional', 'mask_real_face']
+    loss_modes = ['original', 'overfit', 'conditional', 'mask_real_face', 'overfit_by_GAN']
     loss_choice = loss_modes[-1]
     print(f"Your choice of loss function is: {loss_choice}")
     ## -------------------------- plug in the BiSeNet for face segmentation -------------------------- 
@@ -377,10 +377,12 @@ def training_loop(
     if rank == 0:
         print('Exporting sample images...')
         grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
-
-        images_masked = get_face_mask(images, type='numpy')
         save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
-        save_image_grid(images_masked, os.path.join(run_dir, 'reals_masked.png'), drange=[0,255], grid_size=grid_size)
+        
+        if loss_choice == 'mask_real_face':
+            images_masked = get_face_mask(images, type='numpy')
+            save_image_grid(images_masked, os.path.join(run_dir, 'reals_masked.png'), drange=[0,255], grid_size=grid_size)
+
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
 
@@ -425,9 +427,11 @@ def training_loop(
             all_gen_c = [training_set.get_label(np.random.randint(len(training_set))) for _ in range(len(phases) * batch_size)]
             all_gen_c = torch.from_numpy(np.stack(all_gen_c)).pin_memory().to(device)
             all_gen_c = [phase_gen_c.split(batch_gpu) for phase_gen_c in all_gen_c.split(batch_size)]
+        
 
         # Execute training phases.
         for phase, phase_gen_z, phase_gen_c in zip(phases, all_gen_z, all_gen_c):
+           
             if batch_idx % phase.interval != 0:
                 continue
             if phase.start_event is not None:
@@ -449,6 +453,15 @@ def training_loop(
                     real_img_masked_batch = get_face_mask(real_img) 
                     # save_image_grid(real_img_masked_batch.cpu().numpy(), os.path.join(run_dir, f'debug{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=(2,2))
                     loss.accumulate_gradients(phase=phase.name, real_c=real_c, real_img=real_img_masked_batch, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
+                elif loss_choice == 'overfit_by_GAN':   
+                    # replace real image with 3DMM data rendered
+                    # real_3dmm_image = loss.run_G(gen_z, real_c, )
+                    _gen_img, _gen_ws = loss.run_G(gen_z, real_c, swapping_prob=0, neural_rendering_resolution=loss.neural_rendering_resolution_initial)
+                    real_3dmm_image = _gen_img["image_real"]
+                    # st()
+                    save_image_grid(real_3dmm_image.detach().cpu().numpy(), os.path.join(run_dir, f'debug{cur_nimg//1000:06d}.png'), drange=[0,1], grid_size=(2,2))
+                    loss.accumulate_gradients(phase=phase.name, real_c=real_c, real_img=real_3dmm_image, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
+                
                 else:
                     print(f"Invalid loss choice, please choose from [{loss_modes}]")
                     
