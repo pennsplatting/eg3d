@@ -287,7 +287,7 @@ def training_loop(
             phase.opt.zero_grad(set_to_none=True)
             phase.module.requires_grad_(True)
             for real_img, real_c, gen_z, gen_z_bg, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_z_bg, phase_gen_c):
-                loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_z_bg=gen_z_bg, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg)
+                loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_z_bg=gen_z_bg, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg, cur_tick=cur_tick)
                 # FIXME: for debug
                 # loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=real_img, gen_z=gen_z, gen_z_bg=gen_z_bg, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
             phase.module.requires_grad_(False)
@@ -417,9 +417,9 @@ def training_loop(
                 snapshot_data[name] = module
                 del module # conserve memory
             snapshot_pkl = os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl')
-            if rank == 0:
-                with open(snapshot_pkl, 'wb') as f:
-                    pickle.dump(snapshot_data, f)
+            # if rank == 0:
+            #     with open(snapshot_pkl, 'wb') as f:
+            #         pickle.dump(snapshot_data, f)
 
         # # Evaluate metrics.
         # if (snapshot_data is not None) and (len(metrics) > 0):

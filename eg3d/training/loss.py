@@ -125,7 +125,7 @@ class StyleGAN2Loss(Loss):
         #         # print(f"Gradients for {name} have NOT been computed!!")
         # print(f"Gradients for self.G -----end---")
         
-    def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_z_bg, gen_c, gain, cur_nimg):
+    def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_z_bg, gen_c, gain, cur_nimg, cur_tick):
         assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth']
         if self.G.rendering_kwargs.get('density_reg', 0) == 0:
             phase = {'Greg': 'none', 'Gboth': 'Gmain'}.get(phase, phase)
@@ -153,6 +153,15 @@ class StyleGAN2Loss(Loss):
 
         real_img = {'image': real_img, 'image_raw': real_img_raw} # no loss is calculated based on depth 
 
+        weight = 0
+        
+        if cur_tick < 2:
+            weight = 1
+        elif cur_tick < 10:
+            weight *= 0.5
+        else:
+            weight = 0
+            
         # Gmain: Maximize logits for generated images.
         if phase in ['Gmain', 'Gboth']:
             with torch.autograd.profiler.record_function('Gmain_forward'):
@@ -161,9 +170,13 @@ class StyleGAN2Loss(Loss):
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits)
+                # FIXME: weighted loss
+                # loss_Gmain = torch.nn.functional.softplus(-gen_logits) * weight
+                l2_loss = torch.nn.functional.mse_loss(gen_img["image_real"], gen_img["image"])
                 training_stats.report('Loss/G/loss', loss_Gmain)
             with torch.autograd.profiler.record_function('Gmain_backward'):
-                loss_Gmain.mean().mul(gain).backward()
+                # loss_Gmain.mean().mul(gain).backward()
+                (loss_Gmain + l2_loss).mean().mul(gain).backward()
                 
             #     ## FIXME: debug grad
             #     print(f"Gradients for self.G -----begin---")
