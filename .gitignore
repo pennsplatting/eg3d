@@ -32,6 +32,7 @@ eg3d/~
 
 # submodules
 dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/
+eg3d/training/gaussian_splatting/submodules
 
 #data
 *.zip
