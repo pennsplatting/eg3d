@@ -374,7 +374,7 @@ def training_loop(
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
             save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=[-1,1], grid_size=grid_size)
             save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[images_mask.min(), images_mask.max()], grid_size=grid_size)
-            save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
+            # save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
             
             # FIXME: save ply and see if the texture is well optimized
             # G_ema.gaussian_debug.save_ply("./gt_3dmm.ply")
@@ -417,9 +417,9 @@ def training_loop(
                 snapshot_data[name] = module
                 del module # conserve memory
             snapshot_pkl = os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl')
-            # if rank == 0:
-            #     with open(snapshot_pkl, 'wb') as f:
-            #         pickle.dump(snapshot_data, f)
+            if rank == 0:
+                with open(snapshot_pkl, 'wb') as f:
+                    pickle.dump(snapshot_data, f)
 
         # # Evaluate metrics.
         # if (snapshot_data is not None) and (len(metrics) > 0):

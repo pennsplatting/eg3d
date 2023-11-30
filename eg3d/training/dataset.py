@@ -13,7 +13,8 @@
 import os
 import numpy as np
 import zipfile
-import PIL.Image
+import PIL.Image, PIL.ImageFile
+PIL.ImageFile.LOAD_TRUNCATED_IMAGES = True
 import json
 import torch
 import dnnlib
