@@ -377,6 +377,7 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image = torch.where(alpha_image>0, rgb_image, bg)
             
             real_image = torch.cat(real_image_batch)
+            real_image = torch.where(alpha_image>0, real_image, bg)
             ## FIXME: try different normalization method to normalize rgb image to [-1,1]
             rgb_image = (rgb_image - 0.5) * 2
             real_image = (real_image - 0.5) * 2
