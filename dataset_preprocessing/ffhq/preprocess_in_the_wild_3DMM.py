@@ -40,7 +40,7 @@ os.system(command)
 os.chdir('..')
 
 # crop out the input image
-command = "python crop_images_in_the_wild.py --indir=" + args.indir
+command = "python resize_image_of_3DMM.py --indir=" + args.indir
 print(command)
 os.system(command)
 

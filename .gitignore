@@ -18,6 +18,7 @@ out
 training-runs
 *.ply
 
+
 # evaluation:
 temp/
 shapes/
@@ -28,9 +29,14 @@ vids/
 stylegan3/results
 eg3d/results
 eg3d_results
-eg3d/~
+eg3d/~*
+
+# data preprocessing
+FFHQ_*
+
 
 # submodules
+dataset_preprocessing/ffhq/0*
 dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/
 eg3d/training/gaussian_splatting/submodules/
 
