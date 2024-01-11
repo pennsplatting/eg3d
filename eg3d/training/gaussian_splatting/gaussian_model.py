@@ -259,7 +259,7 @@ class GaussianModel:
         opacities = torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda") 
 
         # self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(False))
-        self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True)
+        self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True)
         self._features_rest = features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True)
         
         # features.requires_grad_(True)

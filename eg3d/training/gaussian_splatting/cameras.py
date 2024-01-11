@@ -67,6 +67,7 @@ class MiniCam(nn.Module):
         self.FoVx = 0
         self.znear = znear
         self.zfar = zfar
+        self.projection_matrix = None
         self.world_view_transform = None
         self.full_proj_transform = None
         self.camera_center = None

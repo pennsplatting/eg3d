@@ -327,7 +327,7 @@ def training_loop(
     
     ## -------------------------- choose what loss to use --------------------------
     loss_modes = ['original', 'overfit', 'conditional', 'mask_real_face', 'overfit_by_GAN']
-    loss_choice = loss_modes[-1]
+    loss_choice = loss_modes[0]
     print(f"Your choice of loss function is: {loss_choice}")
     ## -------------------------- plug in the BiSeNet for face segmentation -------------------------- 
 
@@ -540,6 +540,7 @@ def training_loop(
                 print('Aborting...')
 
         # Save image snapshot.
+        print(f"image_snapshot_ticks is {image_snapshot_ticks}")
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             out = [G_ema(z=z, c=c, noise_mode='const') for z, c in zip(grid_z, grid_c)]
             images = torch.cat([o['image'].cpu() for o in out]).detach().numpy()
@@ -552,8 +553,21 @@ def training_loop(
             save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[0,1], grid_size=grid_size)
             
             # FIXME: save ply and see if the texture is well optimized
-            G_ema.gaussian_debug.save_ply("./gt_3dmm.ply")
-            G_ema.gaussian.save_ply("./fake_3dmm.ply")
+            G_ema.gaussian_debug.save_ply(os.path.join(run_dir, "./gt_3dmm.ply"))
+            # G_ema.gaussian.save_ply("./fake_3dmm.ply")
+            
+            for gs_i in range(1, G_ema.num_gaussians+1):
+                # G_ema.save_ply("./fake_3dmm.ply")
+                # getattr(G_ema, f'g{gs_i}').save_ply(os.path.join(run_dir, f"./fake_3dmm_{gs_i}.ply"))
+                _gs = getattr(G_ema, f'g{gs_i}')
+                try:
+                    _gs.save_ply(os.path.join(run_dir, f"./fake_3dmm_{gs_i}.ply"))
+                    print(f"Saved sucessfully the {gs_i}th gaussian")
+                except:
+                    print(f"The {gs_i}th gaussian not updated yet")
+                # pass # TODO: recover the saving of ply
+            print(f"Saved ply for {G_ema.num_gaussians} gaussians")
+            # st()
             #--------------------
             # # Log forward-conditioned images
 
@@ -582,19 +596,25 @@ def training_loop(
         # Save network snapshot.
         snapshot_pkl = None
         snapshot_data = None
-        if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
-            snapshot_data = dict(training_set_kwargs=dict(training_set_kwargs))
-            for name, module in [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]:
-                if module is not None:
-                    if num_gpus > 1:
-                        misc.check_ddp_consistency(module, ignore_regex=r'.*\.[^.]+_(avg|ema)')
-                    module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
-                snapshot_data[name] = module
-                del module # conserve memory
-            snapshot_pkl = os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl')
-            if rank == 0:
-                with open(snapshot_pkl, 'wb') as f:
-                    pickle.dump(snapshot_data, f)
+
+        # ## TODO: recover this save snapshot
+        # if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
+        #     snapshot_data = dict(training_set_kwargs=dict(training_set_kwargs))
+        #     for name, module in [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]:
+        #         if module is not None:
+        #             if num_gpus > 1:
+        #                 misc.check_ddp_consistency(module, ignore_regex=r'.*\.[^.]+_(avg|ema)')
+        #             module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
+        #             # module = module.detach().clone().eval().requires_grad_(False).cpu()
+        #             # print(f"copying module {name}")
+        #             # st()
+        #             # module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
+        #         snapshot_data[name] = module
+        #         del module # conserve memory
+        #     snapshot_pkl = os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl')
+        #     if rank == 0:
+        #         with open(snapshot_pkl, 'wb') as f:
+        #             pickle.dump(snapshot_data, f)
 
         # # Evaluate metrics.
         # if (snapshot_data is not None) and (len(metrics) > 0):

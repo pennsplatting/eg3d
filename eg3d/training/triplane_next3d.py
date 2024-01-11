@@ -234,7 +234,6 @@ class TriPlaneGenerator(torch.nn.Module):
         w2c[:,:3,:3] = batch_R_trans
         return w2c
         # return w2c.contiguous() ## if the above have bug, try to make it contiguous
-
         
         return w2c
     

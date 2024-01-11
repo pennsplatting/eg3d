@@ -269,7 +269,8 @@ def main(**kwargs):
     c.ema_kimg = c.batch_size * 10 / 32
     # c.G_kwargs.class_name = 'training.triplane.TriPlaneGenerator'
     # c.G_kwargs.class_name = 'training.triplane_3dmm.TriPlaneGenerator'
-    c.G_kwargs.class_name = 'training.triplane_next3d.TriPlaneGenerator'
+    # c.G_kwargs.class_name = 'training.triplane_next3d.TriPlaneGenerator'
+    c.G_kwargs.class_name = 'training.triplane_next3d_multiple_gaussian.TriPlaneGenerator'
     print('c.G_kwargs.class_name:', c.G_kwargs.class_name)
     c.D_kwargs.class_name = 'training.dual_discriminator.DualDiscriminator'
     # c.D_kwargs.class_name = 'training.dual_discriminator_condition.DualDiscriminator'
