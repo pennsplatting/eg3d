@@ -25,9 +25,9 @@ from training.volumetric_rendering.ray_marcher import MipRayMarcher2
 from training.volumetric_rendering import math_utils
 
 global Meshes, load_obj, rasterize_meshes
-from pytorch3d.structures import Meshes
-from pytorch3d.io import load_obj
-from pytorch3d.renderer.mesh import rasterize_meshes
+# from pytorch3d.structures import Meshes
+# from pytorch3d.io import load_obj
+# from pytorch3d.renderer.mesh import rasterize_meshes
 
 
 def generate_planes():
