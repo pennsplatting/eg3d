@@ -86,7 +86,7 @@ class TriPlaneGenerator(torch.nn.Module):
         
         ### TODO: -------- 3dmm face model --------
         self.uv_resolution = 256
-        
+        self.verts = None
         self.load_face_model()
         ### -------- 3dmm face model [end] --------
 
@@ -112,7 +112,7 @@ class TriPlaneGenerator(torch.nn.Module):
         # setattr(self,"gaussian", GaussianModel(self.sh_degree, self.verts))
         # setattr(self,"sh_degree",sh_degree)
         # FIXME: gt, init with verts_rgb
-        self.gaussian_debug = GaussianModel(self.sh_degree, self.verts)
+        # self.gaussian_debug = GaussianModel(self.sh_degree, self.verts)
         
     
     def process_uv_with_res(self, uv_coords, uv_h = 256, uv_w = 256):
@@ -136,7 +136,8 @@ class TriPlaneGenerator(torch.nn.Module):
         # normalize to [-0.5, 0.5] and place the center at origin
         verts_norm = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
         verts_norm = torch.tensor(verts_norm, dtype=torch.float, device='cuda')
-        self.register_buffer('verts', verts_norm)
+        # self.register_buffer('verts', verts_norm)
+        self.verts = verts_norm
         
         verts_rgb = np.stack([plydata['vertex'][ax] / 255.0 for ax in ['red', 'green', 'blue']], axis=-1) # [V,3], 0~255 -> 0~1
         self.register_buffer('verts_rgb', torch.tensor(verts_rgb, dtype=torch.float, device='cuda'))
@@ -337,8 +338,8 @@ class TriPlaneGenerator(torch.nn.Module):
             alpha_image_batch = [] # mask
             
             # FIXME: for debug, init gaussians with gt texture
-            self.gaussian_debug.update_rgb_textures(self.verts_rgb)
-            real_image_batch = []
+            # self.gaussian_debug.update_rgb_textures(self.verts_rgb)
+            # real_image_batch = []
             
             # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
             
@@ -352,9 +353,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 48, 1, 5023)
                 # textures.requires_grad_(True) 
                 # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
-                
-                # gaussian.create_from_generated_texture(self.verts, textures)
-                # self.gaussian.create_from_ply2(textures)
+
                 self.gaussian.update_textures(textures)
                 # raterization
                 white_background = True
@@ -369,18 +368,18 @@ class TriPlaneGenerator(torch.nn.Module):
                 rgb_image_batch.append(_rgb_image[None])
                 alpha_image_batch.append(_alpha_image[None])
                 
-                _real_image = gs_render(self.viewpoint_camera, self.gaussian_debug, None, background)["render"]
-                real_image_batch.append(_real_image[None])
+                # _real_image = gs_render(self.viewpoint_camera, self.gaussian_debug, None, background)["render"]
+                # real_image_batch.append(_real_image[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
             rgb_image = torch.where(alpha_image>0, rgb_image, bg)
             
-            real_image = torch.cat(real_image_batch)
-            real_image = torch.where(alpha_image>0, real_image, bg)
+            # real_image = torch.cat(real_image_batch)
+            # real_image = torch.where(alpha_image>0, real_image, bg)
             ## FIXME: try different normalization method to normalize rgb image to [-1,1]
             rgb_image = (rgb_image - 0.5) * 2
-            real_image = (real_image - 0.5) * 2
+            # real_image = (real_image - 0.5) * 2
             # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")
             
             # rgb_image.requires_grad_(True)
@@ -399,7 +398,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
             ### ----- gaussian splatting [END] -----
 
-        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image}
+        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image}
     
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
