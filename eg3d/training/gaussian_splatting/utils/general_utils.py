@@ -14,6 +14,7 @@ import sys
 from datetime import datetime
 import numpy as np
 import random
+from functools import wraps
 
 def inverse_sigmoid(x):
     return torch.log(x/(1-x))
@@ -49,7 +50,7 @@ def get_expon_lr_func(
     :param max_steps: int, the number of steps during optimization.
     :return HoF which takes step as input
     """
-
+    
     def helper(step):
         if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
             # Disable this parameter
@@ -66,6 +67,7 @@ def get_expon_lr_func(
         return delay_rate * log_lerp
 
     return helper
+
 
 def strip_lowerdiag(L):
     uncertainty = torch.zeros((L.shape[0], 6), dtype=torch.float, device="cuda")

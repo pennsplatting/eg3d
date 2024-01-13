@@ -430,16 +430,39 @@ def training_loop(
         
 
         # Execute training phases.
+        phases_updated_gaussians = set()
+
+        
+               
         for phase, phase_gen_z, phase_gen_c in zip(phases, all_gen_z, all_gen_c):
-           
+            # print(phase.name)
             if batch_idx % phase.interval != 0:
                 continue
             if phase.start_event is not None:
                 phase.start_event.record(torch.cuda.current_stream(device))
 
             # Accumulate gradients.
+             
             phase.opt.zero_grad(set_to_none=True)
             phase.module.requires_grad_(True)
+            ## Also set grad for gaussians
+            # print("A")   
+            if 'G' in phase.name:
+                for _gi in range(1, phase.module.num_gaussians+1):
+                    _gs = getattr(phase.module, f"g{_gi}")
+                    _gs.optimizer.zero_grad(set_to_none = True)
+                    _gs.requires_grad(True)
+                    # if _gs._features_dc.requires_grad:
+                    #     print(f"_gs{_gi} _features_dc.requires_grad")    
+                    # print(f"set gs{_gi} to requires grad True ///") # except: self._features_dc, self._features_rest
+                    
+            # print("B")
+            # for _gi in range(1, G.num_gaussians+1):
+            #         _gs = getattr(G, f"g{_gi}")
+            #         if _gs._features_dc.requires_grad:
+            #             print(f"_gs{_gi} _features_dc.requires_grad")
+                    
+           
             
             for real_img, real_c, gen_z, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c):
                 if loss_choice == 'original':
@@ -465,7 +488,27 @@ def training_loop(
                 else:
                     print(f"Invalid loss choice, please choose from [{loss_modes}]")
                     
+            # print("C")
+            # for _gi in range(1, G.num_gaussians+1):
+            #         _gs = getattr(G, f"g{_gi}")
+            #         if _gs._features_dc.requires_grad:
+            #             print(f"_gs{_gi} _features_dc.requires_grad")
+
+                
             phase.module.requires_grad_(False)
+            ## Also set grad for gaussians
+            if 'G' in phase.name:
+                for _gi in range(1, phase.module.num_gaussians+1):
+                    _gs = getattr(phase.module, f"g{_gi}")
+                    _gs.requires_grad(False)
+                    # print(f"set gs{_gi} to requires grad False xxx")
+            
+            # print("D")
+            # for _gi in range(1, G.num_gaussians+1):
+            #         _gs = getattr(G, f"g{_gi}")
+            #         if _gs._features_dc.requires_grad:
+            #             print(f"_gs{_gi} _features_dc.requires_grad")
+            
 
             # Update weights.
             with torch.autograd.profiler.record_function(phase.name + '_opt'):
@@ -480,12 +523,49 @@ def training_loop(
                     for param, grad in zip(params, grads):
                         param.grad = grad.reshape(param.shape)
                 phase.opt.step()
-
+                
+                # print(f"Gradients for {phase.name} -----begin---")
+                # for name, param in phase.module.named_parameters():
+                #     # print(f" {name}") # not including gaussian and minicam
+                #     if param.grad is not None:
+                #         print(f"Gradients for {name} have been computed.")
+                #     else:
+                #         pass
+                #         # print(f"Gradients for {name} have NOT been computed!!")
+                # print(f"Gradients for {phase.name} -----end---")
+                # st()
+                
+                # optimizer step for gaussian
+                # if iteration < opt.iterations: 
+                
+                if 'G' in phase.name:
+                    for _gi in range(1, phase.module.num_gaussians+1):
+                        _gs = getattr(phase.module, f"g{_gi}")
+                        if _gs._xyz.grad is not None:
+                            phases_updated_gaussians.add(_gi)
+                            # st() # bu t here features_dc/rest having requires_grad=True???
+                            _gs.optimizer.step()
+                            _gs.optimizer.zero_grad(set_to_none = True)
+                            # print(f"gs{_gi}._xyz has changed: {torch.any(G.gaussian_debug._xyz != _gs._xyz )}")
+            
+                            
+                elif 'D' in phase.name:
+                    for _gi in range(1, G.num_gaussians+1):
+                        _gs = getattr(G, f"g{_gi}")
+                        if _gs._xyz.grad is not None:
+                            print(f'there should be no grad for gaussians {_gi} in D phase')
+                            st()
+                else:
+                    print(f"what is this phase? -> {phase.name}")
+                            
+            
+            # past_phases.append({phase.name:_updated_gaussians})
             # Phase done.
             if phase.end_event is not None:
                 phase.end_event.record(torch.cuda.current_stream(device))
 
         # Update G_ema.
+        # FIXME: the gaussian_banks are not updated for G_ema!!!
         with torch.autograd.profiler.record_function('Gema'):
             ema_nimg = ema_kimg * 1000
             if ema_rampup is not None:
@@ -497,6 +577,12 @@ def training_loop(
                 b_ema.copy_(b)
             G_ema.neural_rendering_resolution = G.neural_rendering_resolution
             G_ema.rendering_kwargs = G.rendering_kwargs.copy()
+            # TODO: update gaussian bank
+            for _gi in phases_updated_gaussians:
+                _gs_copy = getattr(G, f"g{_gi}").get_copy()
+                setattr(G_ema, f"g{_gi}", _gs_copy)
+            
+            
 
         # Update state.
         cur_nimg += batch_size
@@ -556,16 +642,22 @@ def training_loop(
             G_ema.gaussian_debug.save_ply(os.path.join(run_dir, "./gt_3dmm.ply"))
             # G_ema.gaussian.save_ply("./fake_3dmm.ply")
             
+            print(f"total updated gaussians:{phases_updated_gaussians}")
             for gs_i in range(1, G_ema.num_gaussians+1):
                 # G_ema.save_ply("./fake_3dmm.ply")
                 # getattr(G_ema, f'g{gs_i}').save_ply(os.path.join(run_dir, f"./fake_3dmm_{gs_i}.ply"))
                 _gs = getattr(G_ema, f'g{gs_i}')
                 try:
-                    _gs.save_ply(os.path.join(run_dir, f"./fake_3dmm_{gs_i}.ply"))
-                    print(f"Saved sucessfully the {gs_i}th gaussian")
+                    
+                    # print(f"gs in updated gaussians: {gs_i in past_phases}")
+                    if (gs_i in phases_updated_gaussians):
+                        _gs.save_ply(os.path.join(run_dir, f"./fake_3dmm_{gs_i}.ply"))
+                        print(f"Saved sucessfully the {gs_i}th gaussian")
+                        print(f"the gs xyz has changed: {torch.any(G_ema.gaussian_debug._xyz != _gs._xyz )}")
                 except:
                     print(f"The {gs_i}th gaussian not updated yet")
-                # pass # TODO: recover the saving of ply
+                    pass
+               
             print(f"Saved ply for {G_ema.num_gaussians} gaussians")
             # st()
             #--------------------
