@@ -122,7 +122,14 @@ except:
 
 try:
     ## make a zip ready for training
-    command = f"zip -r {args.indir.split('/')[0]}_finished.zip {out_folder}"
+    os.chdir(out_folder)
+    # command = f"zip -r {args.indir.split('/')[0]}_finished.zip {out_folder}"
+    command = f"zip -o {args.indir.split('/')[0]}_finished.zip *"
+    print(command)
+    os.system(command)
+    os.chdir('..')
+    
+    command = f"mv {out_folder}/{args.indir.split('/')[0]}_finished.zip ."
     print(command)
     os.system(command)
 except:
