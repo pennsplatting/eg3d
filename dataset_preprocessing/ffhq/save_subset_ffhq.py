@@ -133,14 +133,14 @@ class ImageLoader:
 
 def main():
     parser = argparse.ArgumentParser(description="Create a subset of images from a given input directory or zip file.")
-    parser.add_argument("--indir", required=True, help="Input directory or zip file containing images.")
+    parser.add_argument("--original_zip", required=True, help="Input directory or zip file containing images.")
     parser.add_argument("--output_zip_name", required=True, help="Name of the output zip file.")
     parser.add_argument("--subset_size", type=int, default=1000, help="Size of the subset to create.")
 
     args = parser.parse_args()
 
     # Example usage:
-    loader = ImageLoader(path=args.indir, type='zip' if args.indir.endswith('.zip') else 'dir')
+    loader = ImageLoader(path=args.original_zip, type='zip' if args.original_zip.endswith('.zip') else 'dir')
     loader.save_subset_to_zip(subset_size=args.subset_size, output_zip_path=args.output_zip_name)
 
 if __name__ == "__main__":
