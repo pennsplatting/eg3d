@@ -159,11 +159,10 @@ class TriPlaneGenerator(torch.nn.Module):
         v_np = np.array(plydata['vertex'].data.tolist()) / 512.0 - self.rendering_kwargs['box_warp'] / 2
         return torch.tensor(v_np, dtype=torch.float, device='cuda')
         
-    def mapping(self, z, z_bg, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
+    def mapping(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
         if self.rendering_kwargs['c_gen_conditioning_zero']:
             c = torch.zeros_like(c)
         ws = self.backbone.mapping(z, c * self.rendering_kwargs.get('c_scale', 0), truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff, update_emas=update_emas)
-        ws_bg = self.bg_backbone.mapping(z_bg, c * self.rendering_kwargs.get('c_scale', 0), truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff, update_emas=update_emas)
         return ws, ws_bg
 
     def project3d_to_2d(self, intrinsic_matrix, c2w, fname):
@@ -422,10 +421,10 @@ class TriPlaneGenerator(torch.nn.Module):
         planes = planes.view(len(planes), 3, 32, planes.shape[-2], planes.shape[-1])
         return self.renderer.run_model(planes, self.decoder, coordinates, directions, self.rendering_kwargs)
 
-    def forward(self, z, z_bg, c, truncation_psi=1, truncation_cutoff=None, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):
+    def forward(self, z, c, truncation_psi=1, truncation_cutoff=None, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):
         # Render a batch of generated images.
-        ws, ws_bg = self.mapping(z, z_bg, c, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff, update_emas=update_emas)
-        return self.synthesis(ws, ws_bg, c, update_emas=update_emas, neural_rendering_resolution=neural_rendering_resolution, cache_backbone=cache_backbone, use_cached_backbone=use_cached_backbone, **synthesis_kwargs)
+        ws = self.mapping(z, c, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff, update_emas=update_emas)
+        return self.synthesis(ws, c, update_emas=update_emas, neural_rendering_resolution=neural_rendering_resolution, cache_backbone=cache_backbone, use_cached_backbone=use_cached_backbone, **synthesis_kwargs)
 
 
 from training.networks_stylegan2 import FullyConnectedLayer
