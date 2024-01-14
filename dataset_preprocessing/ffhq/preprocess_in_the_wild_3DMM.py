@@ -129,7 +129,7 @@ try:
     os.system(command)
     os.chdir('..')
     
-    command = f"mv {out_folder}/{args.indir.split('/')[0]}_finished.zip ."
+    command = f"mv {out_folder}/{args.indir.split('/')[0]}_finished.zip ~/Repo/eg3d/"
     print(command)
     os.system(command)
 except:

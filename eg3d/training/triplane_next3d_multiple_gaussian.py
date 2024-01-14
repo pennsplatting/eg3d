@@ -110,14 +110,14 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 1000
+        self.num_gaussians = 700
         for i in range(1, self.num_gaussians+1): 
             setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(self.verts), i)) 
         print(f"We have init {self.num_gaussians} gaussians.\n")      
     
     def get_a_gaussian(self):
         gs_i = random.randint(1, self.num_gaussians) # upper bound is included
-        print(gs_i)
+        # print(gs_i)
         return getattr(self, f'g{gs_i}')
         
     
@@ -349,7 +349,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 current_gaussian.update_textures(textures)
                 # raterization
-                white_background = False
+                white_background = True
                 # print(f"GS bg is white:{white_background}: black:{not white_background}")
                 bg_color = [1,1,1] if white_background else [0, 0, 0]
                 background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
