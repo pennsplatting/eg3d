@@ -70,9 +70,10 @@ class GaussianModel:
         self.rotation_activation = torch.nn.functional.normalize
 
 
-    def __init__(self, sh_degree : int, verts, index=-1):
-        self.active_sh_degree = sh_degree
-        self.max_sh_degree = sh_degree  
+    def __init__(self, sh_degree : int, verts, index=-1, active_sh_degree=0):
+        self.active_sh_degree = active_sh_degree
+        self.update_iterations = 0 # to record how many times this gaussian has been updated. for the use of oneupSHdegree()
+        self.max_sh_degree = sh_degree 
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
@@ -89,6 +90,8 @@ class GaussianModel:
         self.init_point_cloud(verts)
         self.index = index
         self.training_setup(gs_training_args)
+        # print(f"init gs_{self.index} has activeSH={self.active_sh_degree}; maxSH={self.max_sh_degree}")
+    
 
     def capture(self):
         return (
@@ -108,7 +111,7 @@ class GaussianModel:
     
     def get_copy(self):
         # Create a new instance of GaussianModel
-        copied_instance = GaussianModel(sh_degree=self.active_sh_degree, verts=self._xyz, index=self.index)
+        copied_instance = GaussianModel(sh_degree=self.max_sh_degree, verts=self._xyz, index=self.index, active_sh_degree=self.active_sh_degree)
 
         # Copy the necessary attributes
         copied_instance._xyz = self._xyz.clone().detach()  # Detach if needed
@@ -288,6 +291,13 @@ class GaussianModel:
     
     # to update gaussian bank
     def update_textures(self, feature_uv):
+        self.update_iterations += 1 # do this before update. start from activeSH=0
+        # print(f"gs_{self.index} at iteration {self.update_iterations}")
+        
+        if self.update_iterations % 1000 == 0:
+            self.oneupSHdegree()
+            # print(f"gs{self.index} now has {self.active_sh_degree} active_sh_degree")
+        
         N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
         features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
         # print(f"--shs: min={shs.min()}, max={shs.max()}, mean={shs.mean()}, shape={shs.shape}")

@@ -132,7 +132,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 700
+        self.num_gaussians = 500
         print(f"We have init {self.num_gaussians} gaussians.\n")     
 
         self.init_from_the_same_canonical = False

@@ -580,6 +580,7 @@ def training_loop(
             G_ema.rendering_kwargs = G.rendering_kwargs.copy()
             # TODO: update gaussian bank
             for _gi in phases_updated_gaussians:
+                # print(f'copying G.g{_gi} to G_ema.g{_gi}')
                 _gs_copy = getattr(G, f"g{_gi}").get_copy()
                 setattr(G_ema, f"g{_gi}", _gs_copy)
             
