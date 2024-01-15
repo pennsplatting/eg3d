@@ -71,7 +71,6 @@ class GaussianModel:
 
 
     def __init__(self, sh_degree : int, verts, index=-1):
-        # self.active_sh_degree = 0
         self.active_sh_degree = sh_degree
         self.max_sh_degree = sh_degree  
         self._xyz = torch.empty(0)
@@ -233,7 +232,7 @@ class GaussianModel:
     def init_point_cloud(self, verts):
         # TODO: freeze some parameters, like self._xyz?
         self._xyz = nn.Parameter(verts)
-        self.spatial_lr_scale = 0 # FIXME: hardcoded from original GS implementation, explained by authors in issue
+        self.spatial_lr_scale = 5 # FIXME: hardcoded from original GS implementation, explained by authors in issue
         print(f"self.spatial_lr_scale:{self.spatial_lr_scale}")
         
 
@@ -458,23 +457,8 @@ class GaussianModel:
         attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
-        
-        # FIXME: output 3dmm ply, see if the color is right
-        vertex = np.empty(xyz.shape[0], dtype=[('x', 'f4'), ('y', 'f4'),('z', 'f4')])
-        vertex[:] = list(map(tuple, xyz))
-        colors = np.empty(f_dc.shape[0], dtype=[('red', 'u1'), ('green', 'u1'),('blue', 'u1')])
-        colors[:] = list(map(tuple, SH2RGB(f_dc)*255))
-        
-        vertex_all = np.empty(xyz.shape[0], vertex.dtype.descr + colors.dtype.descr)
-        for prop in vertex.dtype.names:
-            vertex_all[prop] = vertex[prop]
-
-        for prop in colors.dtype.names:
-            vertex_all[prop] = colors[prop]
-        # color = PlyElement.describe(colors, 'color')
-        # el = PlyElement.describe(vertex, 'vertex')
-        el = PlyElement.describe(vertex_all, 'vertex')
         PlyData([el]).write(path)
+
 
     def reset_opacity(self):
         opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
