@@ -20,6 +20,7 @@ import torch.nn as nn
 from training.volumetric_rendering.ray_marcher import MipRayMarcher2
 from training.volumetric_rendering import math_utils
 
+from ipdb import set_trace as st
 def generate_planes():
     """
     Defines planes by the three vectors that form the "axes" of the
@@ -144,7 +145,13 @@ class ImportanceRenderer(torch.nn.Module):
         ## TODO: change the run_model function here!!!
         ## instead of converting the feature images to tri-plane through "self.plane_axes",
         ## we instead convert the feature images to 3DMM model
+
+        ## tensor shape in original eg3d
+        # planes.shape -> torch.Size([4, 3, 32, 256, 256])
+        # sample_coordinates.shape -> torch.Size([4, 196608, 3])
+        
         sampled_features = sample_from_planes(self.plane_axes, planes, sample_coordinates, padding_mode='zeros', box_warp=options['box_warp'])
+        st() # sampled_features -> [4, 3, 196608, 32]
 
         out = decoder(sampled_features, sample_directions)
         if options.get('density_noise', 0) > 0:

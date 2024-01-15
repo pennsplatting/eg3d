@@ -11,7 +11,7 @@
 import torch
 from torch_utils import persistence
 from training.networks_stylegan2 import Generator as StyleGAN2Backbone
-from training.volumetric_rendering.renderer import ImportanceRenderer
+from training.volumetric_rendering.renderer import ImportanceRenderer, sample_from_planes, generate_planes
 from training.volumetric_rendering.ray_sampler import RaySampler
 import dnnlib
 
@@ -31,12 +31,34 @@ from plyfile import PlyData
 import scipy.io as sio
 import random
 import copy
+import trimesh
+import os
 
 
 # FIXME: replace with gt texture for debug
 # import sys
 # sys.path.append('/home/zxy/eg3d/eg3d/data')
 # from gt.get_uv_texture import get_uv_texture
+
+def load_mesh_to_tensor(file_path, return_color=False, device='cuda'):
+    mesh = trimesh.load(file_path, process=False)
+    
+    vertices = torch.tensor(mesh.vertices, dtype=torch.float32, device=device)
+    # faces = torch.tensor(mesh.faces, dtype=torch.long, device=device)
+    if return_color:
+        vertex_colors = torch.tensor(mesh.visual.vertex_colors, dtype=torch.float32, device=device) / 255.0  # Normalize to [0, 1]
+        return vertices, vertex_colors
+    return vertices
+
+def load_mesh_with_colors(file_path):
+    # Load the mesh with color information
+    mesh = trimesh.load(file_path, process=False)
+
+    # Access the vertices and vertex colors
+    vertices = torch.tensor(mesh.vertices, dtype=torch.float32)
+    vertex_colors = torch.tensor(mesh.visual.vertex_colors, dtype=torch.float32) / 255.0  # Normalize to [0, 1]
+
+    return vertices, vertex_colors
 
 
 def print_grad(name, grad):
@@ -72,8 +94,8 @@ class TriPlaneGenerator(torch.nn.Module):
         self.ray_sampler = RaySampler()
         self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=256, img_channels=32*3, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
         self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
-        # self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
-        self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+        self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
+        # self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
         # self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 3})
         self.neural_rendering_resolution = 64
         self.rendering_kwargs = rendering_kwargs
@@ -105,15 +127,47 @@ class TriPlaneGenerator(torch.nn.Module):
         z_near, z_far = 0.1, 2 # TODO: find suitable value for this
         
         # FIXME: gt, init with verts_rgb
-        self.gaussian_debug = GaussianModel(self.sh_degree, self.verts)
+        self.gaussian_debug = GaussianModel(self.sh_degree, copy.deepcopy(self.verts))
         
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
         self.num_gaussians = 700
-        for i in range(1, self.num_gaussians+1): 
-            setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(self.verts), i)) 
-        print(f"We have init {self.num_gaussians} gaussians.\n")      
+        print(f"We have init {self.num_gaussians} gaussians.\n")     
+
+        self.init_from_the_same_canonical = False
+        if self.init_from_the_same_canonical:
+            # decode -> UV sample
+            self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+            
+            # init gaussian bank from the same canonical face
+            for i in range(1, self.num_gaussians+1): 
+                setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(self.verts), i))
+        else:
+            # triplane sample -> decode
+            self.text_decoder = TextureDecoder2(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+            
+            # init gaussian bank from regressed 3DMM parameters
+            target_mean = self.verts.mean(dim=0)
+            target_scale = 1 / 2.8 # observed by the scale difference: eg3d = target_scale * 3dmm
+            obj_folder = '/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/checkpoints/pretrained/results/00000_1k/epoch_20_000000'
+            obj_paths = [os.path.join(obj_folder, i) for i in sorted(os.listdir(obj_folder)) if i.endswith('obj')]
+            total_different = len(obj_paths)
+            # st()
+            for i in range(1, self.num_gaussians+1):
+                obj_index = (2*(i-1))%total_different
+                file_path = obj_paths[obj_index]
+                print(f"getting the {obj_index} .obj from {file_path}")
+                # st()
+                vertices = load_mesh_to_tensor(file_path)
+                # print(vertices.shape)
+                # normalize to eg3d space
+                vertices = (vertices - vertices.mean(dim=0)) * target_scale + target_mean
+                setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(vertices), i))
+            self.plane_axes_gs = generate_planes().to(self.verts.device)
+        for i in range(1, self.num_gaussians+1):
+            print(getattr(self, f'g{i}')._xyz.shape)
+
     
     def get_a_gaussian(self):
         gs_i = random.randint(1, self.num_gaussians) # upper bound is included
@@ -276,6 +330,7 @@ class TriPlaneGenerator(torch.nn.Module):
         # textures = torch.tensor(get_uv_texture(), dtype=torch.float, device="cuda") # (53215, 3)
         
         original_eg3d = False
+        
         if original_eg3d:
             ## ----- original eg3d version -----
             # Create a batch of rays for volume rendering
@@ -309,7 +364,10 @@ class TriPlaneGenerator(torch.nn.Module):
             ### ----- gaussian splatting -----
             # Reshape output into three 32-channel planes
             ## TODO: convert from triplane to 3DMM here, maybe need a net to decode the feature to RGB or SH
-            textures_gen_batch = self.text_decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256), range [0,1]
+            if self.init_from_the_same_canonical:
+                textures_gen_batch = self.text_decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256), range [0,1]
+            else:
+                textures_gen_batch = planes.view(len(planes), 3, 32, planes.shape[-2], planes.shape[-1]) # torch.Size([4, 3, 32, 256, 256])
             
             # camera setting 
             # world_view_transform_batch = self.getWorld2View_from_eg3d_c(cam2world_matrix) # (4, 4, 4) 
@@ -342,7 +400,15 @@ class TriPlaneGenerator(torch.nn.Module):
                 self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
 
                 ## TODO: can gaussiam splatting run batch in parallel?
-                textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 38, 1, N_pts)
+                if self.init_from_the_same_canonical:
+                    textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 48, 1, N_pts)
+                    st()
+                else:
+                    # textures_gen.shape -> torch.Size([3, 32, 256, 256])
+                    # do not have existing UV map for regressed 3DMM models. Directly sample feature from triplane, to ensure continuity
+                    triplane_textures = sample_from_planes(self.plane_axes_gs, textures_gen[None], current_gaussian._xyz[None], padding_mode='zeros', box_warp=self.rendering_kwargs['box_warp'])
+                    # triplane_textures -> [1, 3, 35709, 32]
+                    textures = self.text_decoder(triplane_textures) # textures -> (1, 48, 1, N_pts)
                 
                 # current_gaussian.update_rgb_textures(textures.squeeze().permute(1,0))
                 # print(f"texture shape:{textures.shape}")
@@ -454,12 +520,13 @@ class TextureDecoder(torch.nn.Module):
         )
         
     def forward(self, sampled_features):
+      
         # features (4, 96, 256, 256) -> (4, 16*3, 256, 256)
         # Aggregate features
+    
         sampled_features = sampled_features.permute(0,2,3,1)
         x = sampled_features
-
-        N, H, W, C = x.shape
+        N, H, W, C = x.shape 
         x = x.reshape(N*H*W, C)
         
         x = self.net(x)
@@ -469,3 +536,28 @@ class TextureDecoder(torch.nn.Module):
     
         x = x.reshape(N, H, W, -1)
         return x.permute(0, 3, 1, 2)
+
+class TextureDecoder2(torch.nn.Module):
+    def __init__(self, n_features, options):
+        super().__init__()
+        self.hidden_dim = 64
+
+        self.net = torch.nn.Sequential(
+            FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
+            torch.nn.Softplus(),
+            FullyConnectedLayer(self.hidden_dim, options['decoder_output_dim'], lr_multiplier=options['decoder_lr_mul'])
+        )
+        
+    def forward(self, sampled_features):
+        # Aggregate features
+        sampled_features = sampled_features.mean(1)
+        x = sampled_features
+
+        N, M, C = x.shape
+        x = x.view(N*M, C)
+
+        x = self.net(x)
+        x = x.view(N, M, -1) # [1, 35709, 49]
+        
+        x = torch.sigmoid(x)*(1 + 2*0.001) - 0.001 
+        return x.permute(0,2,1).unsqueeze(2) # -> [1, 48, 1, 53215]
