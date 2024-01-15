@@ -132,7 +132,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 700
+        self.num_gaussians = 7
         print(f"We have init {self.num_gaussians} gaussians.\n")     
 
         self.init_from_the_same_canonical = False
@@ -149,24 +149,37 @@ class TriPlaneGenerator(torch.nn.Module):
             
             # init gaussian bank from regressed 3DMM parameters
             target_mean = self.verts.mean(dim=0)
-            target_scale = 1 / 2.8 # observed by the scale difference: eg3d = target_scale * 3dmm
-            obj_folder = '/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/checkpoints/pretrained/results/00000_1k/epoch_20_000000'
+            
+            # _t_min, _ = self.verts.min(dim=0)
+            # _t_max, _ = self.verts.max(dim=0)
+            # target_scale = abs(_t_max - _t_min)
+            # print(f"target_scale: {target_scale}")
+            
+            scale_factor = 1 / 3.4 # observed by the scale difference: eg3d = scale_factor * 3dmm
+            obj_folder = '/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/checkpoints/pretrained/results/00000/epoch_20_000000'
             obj_paths = [os.path.join(obj_folder, i) for i in sorted(os.listdir(obj_folder)) if i.endswith('obj')]
             total_different = len(obj_paths)
-            # st()
+            
             for i in range(1, self.num_gaussians+1):
                 obj_index = (2*(i-1))%total_different
                 file_path = obj_paths[obj_index]
                 print(f"getting the {obj_index} .obj from {file_path}")
-                # st()
+                
                 vertices = load_mesh_to_tensor(file_path)
+                
+                # _v_min, _ = vertices.min(dim=0)
+                # _v_max, _ = vertices.max(dim=0)
+                # v_scale = abs(_v_max - _v_min)
+                # scale_factor = (target_scale / v_scale).mean()
+                # print(f"scale_factor: {scale_factor}")
+                
                 # print(vertices.shape)
                 # normalize to eg3d space
-                vertices = (vertices - vertices.mean(dim=0)) * target_scale + target_mean
+                vertices = (vertices - vertices.mean(dim=0)) * scale_factor + target_mean
                 setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(vertices), i))
             self.plane_axes_gs = generate_planes().to(self.verts.device)
-        for i in range(1, self.num_gaussians+1):
-            print(getattr(self, f'g{i}')._xyz.shape)
+        # for i in range(1, self.num_gaussians+1):
+        #     print(getattr(self, f'g{i}')._xyz.shape)
 
     
     def get_a_gaussian(self):
