@@ -70,7 +70,7 @@ class GaussianModel:
         self.rotation_activation = torch.nn.functional.normalize
 
 
-    def __init__(self, sh_degree : int, verts, index=-1, active_sh_degree=0):
+    def __init__(self, sh_degree : int, verts, index=-1, active_sh_degree=1):
         self.active_sh_degree = active_sh_degree
         self.update_iterations = 0 # to record how many times this gaussian has been updated. for the use of oneupSHdegree()
         self.max_sh_degree = sh_degree 
@@ -235,7 +235,7 @@ class GaussianModel:
     def init_point_cloud(self, verts):
         # TODO: freeze some parameters, like self._xyz?
         self._xyz = nn.Parameter(verts)
-        self.spatial_lr_scale = 5 # FIXME: hardcoded from original GS implementation, explained by authors in issue
+        self.spatial_lr_scale = 0 # FIXME: hardcoded from original GS implementation, explained by authors in issue
         print(f"self.spatial_lr_scale:{self.spatial_lr_scale}")
         
 
