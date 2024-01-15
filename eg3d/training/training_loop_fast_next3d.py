@@ -452,8 +452,8 @@ def training_loop(
                     _gs = getattr(phase.module, f"g{_gi}")
                     _gs.optimizer.zero_grad(set_to_none = True)
                     _gs.requires_grad(True)
-                    # if _gs._features_dc.requires_grad:
-                    #     print(f"_gs{_gi} _features_dc.requires_grad")    
+                    # if _gs._xyz.requires_grad:
+                    #     print(f"_gs{_gi} _xyz.requires_grad")    
                     # print(f"set gs{_gi} to requires grad True ///") # except: self._features_dc, self._features_rest
                     
             # print("B")
@@ -547,6 +547,7 @@ def training_loop(
                             _gs.optimizer.step()
                             _gs.optimizer.zero_grad(set_to_none = True)
                             # print(f"gs{_gi}._xyz has changed: {torch.any(G.gaussian_debug._xyz != _gs._xyz )}")
+                            print(f'---the gs {_gi} xyz has changed: {torch.any(getattr(G_ema, f"g{_gi}")._xyz != _gs._xyz )}')
             
                             
                 elif 'D' in phase.name:
@@ -653,7 +654,7 @@ def training_loop(
                     if (gs_i in phases_updated_gaussians):
                         _gs.save_ply(os.path.join(run_dir, f"./fake_3dmm_{gs_i}.ply"))
                         print(f"Saved sucessfully the {gs_i}th gaussian")
-                        print(f"the gs xyz has changed: {torch.any(G_ema.gaussian_debug._xyz != _gs._xyz )}")
+                        # print(f"the gs xyz has changed: {torch.any(G_ema.gaussian_debug._xyz != _gs._xyz )}")
                 except:
                     print(f"The {gs_i}th gaussian not updated yet")
                     pass

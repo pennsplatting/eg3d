@@ -233,7 +233,8 @@ class GaussianModel:
     def init_point_cloud(self, verts):
         # TODO: freeze some parameters, like self._xyz?
         self._xyz = nn.Parameter(verts)
-        self.spatial_lr_scale = 5 # FIXME: hardcoded from original GS implementation, explained by authors in issue
+        self.spatial_lr_scale = 0 # FIXME: hardcoded from original GS implementation, explained by authors in issue
+        print(f"self.spatial_lr_scale:{self.spatial_lr_scale}")
         
 
         dist2 = torch.clamp_min(distCUDA2(self._xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
@@ -401,6 +402,14 @@ class GaussianModel:
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"}
         ]
+
+        # l = [
+        #     {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
+        #     {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
+        #     {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
+        #     {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
+        #     {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"}
+        # ]
         
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         

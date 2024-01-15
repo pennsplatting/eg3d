@@ -132,7 +132,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 7
+        self.num_gaussians = 700
         print(f"We have init {self.num_gaussians} gaussians.\n")     
 
         self.init_from_the_same_canonical = False
@@ -156,7 +156,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # print(f"target_scale: {target_scale}")
             
             scale_factor = 1 / 3.4 # observed by the scale difference: eg3d = scale_factor * 3dmm
-            obj_folder = '/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/checkpoints/pretrained/results/00000/epoch_20_000000'
+            obj_folder = '/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/checkpoints/pretrained/results/00000_1k_no_rotation/epoch_20_000000'
             obj_paths = [os.path.join(obj_folder, i) for i in sorted(os.listdir(obj_folder)) if i.endswith('obj')]
             total_different = len(obj_paths)
             
@@ -415,7 +415,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 ## TODO: can gaussiam splatting run batch in parallel?
                 if self.init_from_the_same_canonical:
                     textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 48, 1, N_pts)
-                    st()
+                    # st()
                 else:
                     # textures_gen.shape -> torch.Size([3, 32, 256, 256])
                     # do not have existing UV map for regressed 3DMM models. Directly sample feature from triplane, to ensure continuity
