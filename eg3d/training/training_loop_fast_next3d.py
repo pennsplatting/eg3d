@@ -640,28 +640,29 @@ def training_loop(
             save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[images_mask.min(), images_mask.max()], grid_size=grid_size)
             save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[0,1], grid_size=grid_size)
             
-            # FIXME: save ply and see if the texture is well optimized
-            G_ema.gaussian_debug.save_ply(os.path.join(run_dir, "./gt_3dmm.ply"))
-            # G_ema.gaussian.save_ply("./fake_3dmm.ply")
+            
+            
+            save_override_color = getattr(G_ema, 'use_colors_precomp')
+            
+            # save ply and see if the texture is well optimized
+            # if not os.path.exists(os.path.join(run_dir, "./gt_3dmm.ply")):
+            G_ema.gaussian_debug.save_ply(os.path.join(run_dir, "./gt_3dmm.ply"), save_override_color)
             
             print(f"total updated gaussians:{phases_updated_gaussians}")
-            for gs_i in range(1, G_ema.num_gaussians+1):
-                # G_ema.save_ply("./fake_3dmm.ply")
+            
+            for gs_i in phases_updated_gaussians:
                 # getattr(G_ema, f'g{gs_i}').save_ply(os.path.join(run_dir, f"./fake_3dmm_{gs_i}.ply"))
                 _gs = getattr(G_ema, f'g{gs_i}')
+                # print(f"gs in updated gaussians: {gs_i in past_phases}")
                 try:
-                    
-                    # print(f"gs in updated gaussians: {gs_i in past_phases}")
-                    if (gs_i in phases_updated_gaussians):
-                        _gs.save_ply(os.path.join(run_dir, f"./fake_3dmm_{gs_i}.ply"))
-                        print(f"Saved sucessfully the {gs_i}th gaussian")
-                        # print(f"the gs xyz has changed: {torch.any(G_ema.gaussian_debug._xyz != _gs._xyz )}")
+                    _gs.save_ply(os.path.join(run_dir, f"./fake_3dmm_{gs_i}.ply"),save_override_color=save_override_color)
+                    print(f"Saved sucessfully the {gs_i}th gaussian")
                 except:
                     print(f"The {gs_i}th gaussian not updated yet")
                     pass
                
-            print(f"Saved ply for {G_ema.num_gaussians} gaussians")
-            # st()
+            print(f"Saved ply for {phases_updated_gaussians} gaussians")
+        
             #--------------------
             # # Log forward-conditioned images
 

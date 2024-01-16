@@ -292,7 +292,7 @@ class GaussianModel:
     # to update gaussian bank
     def update_textures(self, feature_uv):
         self.update_iterations += 1 # do this before update. start from activeSH=0
-        # print(f"gs_{self.index} at iteration {self.update_iterations}")
+        print(f"gs_{self.index} at iteration {self.update_iterations}")
         
         if self.update_iterations % 1000 == 0:
             self.oneupSHdegree()
@@ -450,24 +450,60 @@ class GaussianModel:
             l.append('rot_{}'.format(i))
         return l
 
-    def save_ply(self, path):
-        mkdir_p(os.path.dirname(path))
+    def save_ply(self, path, save_override_color=False):
+        if not save_override_color:
+            mkdir_p(os.path.dirname(path))
 
-        xyz = self._xyz.detach().cpu().numpy()
-        normals = np.zeros_like(xyz)
-        f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-        f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-        opacities = self._opacity.detach().cpu().numpy()
-        scale = self._scaling.detach().cpu().numpy()
-        rotation = self._rotation.detach().cpu().numpy()
+            xyz = self._xyz.detach().cpu().numpy()
+            normals = np.zeros_like(xyz)
+            f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+            f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+            opacities = self._opacity.detach().cpu().numpy()
+            scale = self._scaling.detach().cpu().numpy()
+            rotation = self._rotation.detach().cpu().numpy()
 
-        dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+            dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
-        elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
-        elements[:] = list(map(tuple, attributes))
-        el = PlyElement.describe(elements, 'vertex')
-        PlyData([el]).write(path)
+            elements = np.empty(xyz.shape[0], dtype=dtype_full)
+            attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+            elements[:] = list(map(tuple, attributes))
+            el = PlyElement.describe(elements, 'vertex')
+            PlyData([el]).write(path)
+    
+        else:
+            mkdir_p(os.path.dirname(path))
+
+            xyz = self._xyz.detach().cpu().numpy()
+            normals = np.zeros_like(xyz)
+            f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+            f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+            opacities = self._opacity.detach().cpu().numpy()
+            scale = self._scaling.detach().cpu().numpy()
+            rotation = self._rotation.detach().cpu().numpy()
+
+            dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+
+            elements = np.empty(xyz.shape[0], dtype=dtype_full)
+            attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+            elements[:] = list(map(tuple, attributes))
+            el = PlyElement.describe(elements, 'vertex')
+            
+            # FIXME: output 3dmm ply, see if the color is right
+            vertex = np.empty(xyz.shape[0], dtype=[('x', 'f4'), ('y', 'f4'),('z', 'f4')])
+            vertex[:] = list(map(tuple, xyz))
+            colors = np.empty(f_dc.shape[0], dtype=[('red', 'u1'), ('green', 'u1'),('blue', 'u1')])
+            colors[:] = list(map(tuple, SH2RGB(f_dc)*255))
+            
+            vertex_all = np.empty(xyz.shape[0], vertex.dtype.descr + colors.dtype.descr)
+            for prop in vertex.dtype.names:
+                vertex_all[prop] = vertex[prop]
+
+            for prop in colors.dtype.names:
+                vertex_all[prop] = colors[prop]
+            # color = PlyElement.describe(colors, 'color')
+            # el = PlyElement.describe(vertex, 'vertex')
+            el = PlyElement.describe(vertex_all, 'vertex')
+            PlyData([el]).write(path)
 
 
     def reset_opacity(self):

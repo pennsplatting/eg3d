@@ -81,6 +81,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     shs = None
     colors_precomp = None
     if override_color is None:
+        st()
         # if pipe.convert_SHs_python:
         #     shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
         #     dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
@@ -90,10 +91,9 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         # else:
         shs = pc.get_features # should map to ([0,1]=0.5)/C0
     else:
-        colors_precomp = override_color
+        colors_precomp = override_color # override_color -> [Npts, 3], range in [0,1]
+    
 
-    # # st() #check shs range
-    # print(f"--shs: min={shs.min()}, max={shs.max()}, mean={shs.mean()}, shape={shs.shape}")
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     rendered_image, radii, rendered_depth, rendered_alpha = rasterizer(
         means3D = means3D,

@@ -128,12 +128,22 @@ class TriPlaneGenerator(torch.nn.Module):
         
         # FIXME: gt, init with verts_rgb
         self.gaussian_debug = GaussianModel(self.sh_degree, copy.deepcopy(self.verts))
+        self.gaussian_debug.update_rgb_textures(self.verts_rgb)
         
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 500
-        print(f"We have init {self.num_gaussians} gaussians.\n")     
+        self.num_gaussians = 2
+        print(f"We have init {self.num_gaussians} gaussians.\n")  
+        
+        # use colors_precomp instead of shs in gaussian_model.render()
+        self.use_colors_precomp = True
+          
+        # raterization
+        white_background = True
+        # print(f"GS bg is white:{white_background}: black:{not white_background}")
+        bg_color = [1,1,1] if white_background else [0, 0, 0]
+        self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         self.init_from_the_same_canonical = False
         if self.init_from_the_same_canonical:
@@ -150,10 +160,6 @@ class TriPlaneGenerator(torch.nn.Module):
             # init gaussian bank from regressed 3DMM parameters
             target_mean = self.verts.mean(dim=0)
             
-            # _t_min, _ = self.verts.min(dim=0)
-            # _t_max, _ = self.verts.max(dim=0)
-            # target_scale = abs(_t_max - _t_min)
-            # print(f"target_scale: {target_scale}")
             
             scale_factor = 1 / 3.4 # observed by the scale difference: eg3d = scale_factor * 3dmm
             obj_folder = '/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/checkpoints/pretrained/results/00000_1k_no_rotation/epoch_20_000000'
@@ -167,19 +173,10 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 vertices = load_mesh_to_tensor(file_path)
                 
-                # _v_min, _ = vertices.min(dim=0)
-                # _v_max, _ = vertices.max(dim=0)
-                # v_scale = abs(_v_max - _v_min)
-                # scale_factor = (target_scale / v_scale).mean()
-                # print(f"scale_factor: {scale_factor}")
-                
-                # print(vertices.shape)
                 # normalize to eg3d space
                 vertices = (vertices - vertices.mean(dim=0)) * scale_factor + target_mean
                 setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(vertices), i))
             self.plane_axes_gs = generate_planes().to(self.verts.device)
-        # for i in range(1, self.num_gaussians+1):
-        #     print(getattr(self, f'g{i}')._xyz.shape)
 
     
     def get_a_gaussian(self):
@@ -397,51 +394,41 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image_batch = []
             alpha_image_batch = [] # mask
             
-            # FIXME: for debug, init gaussians with gt texture
-            self.gaussian_debug.update_rgb_textures(self.verts_rgb)
+            
             real_image_batch = []
             
-            # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
-            
+            ## TODO: can gaussiam splatting run batch in parallel?
             # for world_view_transform, textures_gen in zip(world_view_transform_batch, textures_gen_batch):
-            for _cam2world_matrix, textures_gen in zip(cam2world_matrix, textures_gen_batch):
+            for _cam2world_matrix, textures_gen in zip(cam2world_matrix, textures_gen_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
                 # randomly select a new gaussian for each rendering
                 current_gaussian = self.get_a_gaussian()
-                # print(f"current_gaussian._xyz.grad: {current_gaussian._xyz.grad}")
-                # full_proj_transform = world_view_transform @ projection_matrix
-                # self.viewpoint_camera.update_transforms(intrinsics, world_view_transform)
                 self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
 
-                ## TODO: can gaussiam splatting run batch in parallel?
                 if self.init_from_the_same_canonical:
                     textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 48, 1, N_pts)
                     # st()
                 else:
-                    # textures_gen.shape -> torch.Size([3, 32, 256, 256])
                     # do not have existing UV map for regressed 3DMM models. Directly sample feature from triplane, to ensure continuity
-                    triplane_textures = sample_from_planes(self.plane_axes_gs, textures_gen[None], current_gaussian._xyz[None], padding_mode='zeros', box_warp=self.rendering_kwargs['box_warp'])
-                    # triplane_textures -> [1, 3, 35709, 32]
+                    triplane_textures = sample_from_planes(self.plane_axes_gs, textures_gen[None], current_gaussian._xyz[None], padding_mode='zeros', box_warp=self.rendering_kwargs['box_warp']) # triplane_textures -> [1, 3, 35709, 32]
                     textures = self.text_decoder(triplane_textures) # textures -> (1, 48, 1, N_pts)
                 
-                # current_gaussian.update_rgb_textures(textures.squeeze().permute(1,0))
-                # print(f"texture shape:{textures.shape}")
                 
-                current_gaussian.update_textures(textures)
-                # raterization
-                white_background = True
-                # print(f"GS bg is white:{white_background}: black:{not white_background}")
-                bg_color = [1,1,1] if white_background else [0, 0, 0]
-                background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+                if self.use_colors_precomp:
+                    # TODO: make the decoder aware of whether rgb or sh output
+                    override_color = textures[0,:3,0].permute(1,0) # textures['rgb'] # override_color -> [Npts, 3], range in [0,1]
+                    current_gaussian.update_rgb_textures(override_color)
+                else:
+                    override_color = None
+                    current_gaussian.update_textures(textures)
                 
-                res = gs_render(self.viewpoint_camera, current_gaussian, None, background)
+                res = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
                 _rgb_image = res["render"]
                 _alpha_image = res["alpha"]
                 ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
                 
                 rgb_image_batch.append(_rgb_image[None])
                 alpha_image_batch.append(_alpha_image[None])
-                
-                _real_image = gs_render(self.viewpoint_camera, self.gaussian_debug, None, background)["render"]
+                _real_image = gs_render(self.viewpoint_camera, self.gaussian_debug, None, self.background, override_color=self.verts_rgb)["render"]
                 real_image_batch.append(_real_image[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
