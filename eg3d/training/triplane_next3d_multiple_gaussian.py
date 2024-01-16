@@ -140,7 +140,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 2
+        self.num_gaussians = 500
         print(f"We have init {self.num_gaussians} gaussians.\n")  
         
         
@@ -151,6 +151,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         self.init_from_the_same_canonical = False
+        # the decoder output dim is aware of whether use rgb or sh to render gaussian, controled by use_colors_precomp
         if self.init_from_the_same_canonical:
             # decode -> UV sample
             self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
@@ -164,7 +165,6 @@ class TriPlaneGenerator(torch.nn.Module):
             
             # init gaussian bank from regressed 3DMM parameters
             target_mean = self.verts.mean(dim=0)
-            
             
             scale_factor = 1 / 3.4 # observed by the scale difference: eg3d = scale_factor * 3dmm
             obj_folder = '/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/checkpoints/pretrained/results/00000_1k_no_rotation/epoch_20_000000'
@@ -415,12 +415,11 @@ class TriPlaneGenerator(torch.nn.Module):
                 else:
                     # do not have existing UV map for regressed 3DMM models. Directly sample feature from triplane, to ensure continuity
                     triplane_textures = sample_from_planes(self.plane_axes_gs, textures_gen[None], current_gaussian._xyz[None], padding_mode='zeros', box_warp=self.rendering_kwargs['box_warp']) # triplane_textures -> [1, 3, 35709, 32]
-                    textures = self.text_decoder(triplane_textures) # textures -> (1, 48, 1, N_pts)
+                    textures = self.text_decoder(triplane_textures) # textures -> (1, C, 1, N_pts), C=3 when use_colors_precomp, C=48 when use SH.
                 
                 
                 if self.use_colors_precomp:
-                    # TODO: make the decoder aware of whether rgb or sh output
-                    override_color = textures[0,:3,0].permute(1,0) # textures['rgb'] # override_color -> [Npts, 3], range in [0,1]
+                    override_color = textures[0,:3,0].permute(1,0) # override_color -> [Npts, 3], range in [0,1]
                     current_gaussian.update_rgb_textures(override_color)
                 else:
                     override_color = None

@@ -91,7 +91,7 @@ class GaussianModel:
         self.init_point_cloud(verts)
         self.index = index
         self.training_setup(gs_training_args)
-        print(f"init gs_{self.index} has activeSH={self.active_sh_degree}; maxSH={self.max_sh_degree}")
+        # print(f"init gs_{self.index} has activeSH={self.active_sh_degree}; maxSH={self.max_sh_degree}")
     
 
     def capture(self):
