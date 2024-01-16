@@ -111,7 +111,14 @@ class TriPlaneGenerator(torch.nn.Module):
         
         ### -------- gaussian splatting render --------
         self.gaussian_splatting_use_sr = False
+
+        # use colors_precomp instead of shs in gaussian_model.render()
+        self.use_colors_precomp = True
+        # when use_colors_precomp, SHdegree=0
+        sh_degree = sh_degree * (1-self.use_colors_precomp)
+        print(f"G->SHdegree={sh_degree}, use_colors_precomp={self.use_colors_precomp}")
         self.sh_degree = sh_degree
+    
         # self.gaussian = None
         # self.viewpoint_camera = None
         
@@ -136,9 +143,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.num_gaussians = 2
         print(f"We have init {self.num_gaussians} gaussians.\n")  
         
-        # use colors_precomp instead of shs in gaussian_model.render()
-        self.use_colors_precomp = True
-          
+        
         # raterization
         white_background = True
         # print(f"GS bg is white:{white_background}: black:{not white_background}")

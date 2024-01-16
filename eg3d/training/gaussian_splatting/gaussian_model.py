@@ -71,7 +71,8 @@ class GaussianModel:
 
 
     def __init__(self, sh_degree : int, verts, index=-1, active_sh_degree=1):
-        self.active_sh_degree = active_sh_degree
+        self.active_sh_degree = min(active_sh_degree, sh_degree)
+        
         self.update_iterations = 0 # to record how many times this gaussian has been updated. for the use of oneupSHdegree()
         self.max_sh_degree = sh_degree 
         self._xyz = torch.empty(0)
@@ -90,7 +91,7 @@ class GaussianModel:
         self.init_point_cloud(verts)
         self.index = index
         self.training_setup(gs_training_args)
-        # print(f"init gs_{self.index} has activeSH={self.active_sh_degree}; maxSH={self.max_sh_degree}")
+        print(f"init gs_{self.index} has activeSH={self.active_sh_degree}; maxSH={self.max_sh_degree}")
     
 
     def capture(self):
