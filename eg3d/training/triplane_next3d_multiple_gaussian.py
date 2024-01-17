@@ -113,15 +113,12 @@ class TriPlaneGenerator(torch.nn.Module):
         self.gaussian_splatting_use_sr = False
 
         # use colors_precomp instead of shs in gaussian_model.render()
-        self.use_colors_precomp = True
+        self.use_colors_precomp = False
         # when use_colors_precomp, SHdegree=0
         sh_degree = sh_degree * (1-self.use_colors_precomp)
         print(f"G->SHdegree={sh_degree}, use_colors_precomp={self.use_colors_precomp}")
         self.sh_degree = sh_degree
     
-        # self.gaussian = None
-        # self.viewpoint_camera = None
-        
         # initialize camera and gaussians
         
         ## gaussian_splatting rendering resolution: 
@@ -145,9 +142,9 @@ class TriPlaneGenerator(torch.nn.Module):
         
         
         # raterization
-        white_background = True
+        self.white_background = True
         # print(f"GS bg is white:{white_background}: black:{not white_background}")
-        bg_color = [1,1,1] if white_background else [0, 0, 0]
+        bg_color = [1,1,1] if self.white_background else [0, 0, 0]
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         self.init_from_the_same_canonical = False
@@ -183,7 +180,21 @@ class TriPlaneGenerator(torch.nn.Module):
                 setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(vertices), i))
             self.plane_axes_gs = generate_planes().to(self.verts.device)
 
-    
+    def record_attributes_to_json(self):
+        
+        attributes_to_record = {
+            # Add other boolean attributes here
+            "gaussian_splatting_use_sr": self.gaussian_splatting_use_sr,
+            "use_colors_precomp": self.use_colors_precomp,
+            "sh_degree(max)": self.sh_degree,
+            "num_gaussians": self.num_gaussians,
+            "gassian render background": 'white' if self.white_background else 'black',
+            "gaussian bank init": 'same' if self.init_from_the_same_canonical else f'different_{self.num_gaussians}',
+            # Add more attributes as needed
+        }
+        
+        return attributes_to_record
+            
     def get_a_gaussian(self):
         gs_i = random.randint(1, self.num_gaussians) # upper bound is included
         # print(gs_i)
@@ -432,7 +443,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 rgb_image_batch.append(_rgb_image[None])
                 alpha_image_batch.append(_alpha_image[None])
-                _real_image = gs_render(self.viewpoint_camera, self.gaussian_debug, None, self.background, override_color=self.verts_rgb)["render"]
+                _real_image = gs_render(self.viewpoint_camera, self.gaussian_debug, None, self.background, override_color=self.verts_rgb if self.use_colors_precomp else None)["render"]
                 real_image_batch.append(_real_image[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]

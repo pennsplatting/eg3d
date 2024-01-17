@@ -45,7 +45,12 @@ args.save_iterations.append(args.iterations)
 
 gs_training_args = op.extract(args)
 # print(f"gs_training_args: {vars(gs_training_args)}")
-# st()
+fix_opacity_scaling_rotation=True
+print(f"You choose to fix_opacity_scaling_rotation:{fix_opacity_scaling_rotation}")
+if fix_opacity_scaling_rotation:
+    gs_training_args.opacity_lr=0
+    gs_training_args.scaling_lr=0
+    gs_training_args.rotation_lr=0
 
 def print_grad(name, grad):
     print(f"{name}:")
@@ -244,9 +249,12 @@ class GaussianModel:
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
         rots = torch.zeros((self._xyz.shape[0], 4), device="cuda")
         rots[:, 0] = 1
-
-        opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
-        # opacities = torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda")
+        
+        if gs_training_args.opacity_lr==0:
+            # print("when no lr for opacity, init opacity to ones")
+            opacities = torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda")
+        else:
+            opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))        
@@ -293,11 +301,11 @@ class GaussianModel:
     # to update gaussian bank
     def update_textures(self, feature_uv):
         self.update_iterations += 1 # do this before update. start from activeSH=0
-        print(f"gs_{self.index} at iteration {self.update_iterations}")
+        # print(f"gs_{self.index} at iteration {self.update_iterations}")
         
         if self.update_iterations % 1000 == 0:
             self.oneupSHdegree()
-            # print(f"gs{self.index} now has {self.active_sh_degree} active_sh_degree")
+            print(f"gs{self.index} now has {self.active_sh_degree} active_sh_degree")
         
         N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
         features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
@@ -404,6 +412,7 @@ class GaussianModel:
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         
+       
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
             {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
@@ -412,15 +421,8 @@ class GaussianModel:
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"}
         ]
-
-        # l = [
-        #     {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
-        #     {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
-        #     {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
-        #     {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
-        #     {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"}
-        # ]
         
+
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         
         # FIXME: not pickle-able. Adjusting the lr foir xyz dynamically.

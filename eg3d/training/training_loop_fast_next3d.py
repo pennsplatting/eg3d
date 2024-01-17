@@ -37,6 +37,7 @@ import cv2
 import os.path as osp
 from PIL import Image
 import torchvision.transforms as transforms
+from training.other_utils import get_optimizer_parameters
 
 #----------------------------------------------------------------------------
 
@@ -344,6 +345,30 @@ def training_loop(
         net.eval()
     
     ##### --------------------------
+    
+    ## -------------- record some attributes of G -----------------------
+    # get original contents
+    # with open( 'wt') as f:
+    #     json.dump(c, f, indent=2)
+    with open(os.path.join(run_dir, 'training_options.json'), 'r') as json_file:
+        existing_data = json.load(json_file)
+    # append G's attributes
+    # 
+    existing_data.update(
+        {'G':G.record_attributes_to_json()}
+        )
+    
+    # append gaussian's attributes
+    existing_data.update(
+        {'gaussian optimizer':get_optimizer_parameters(G.g1.optimizer)}
+        )
+    
+    # write back
+    # Write the updated data back to the file
+    with open(os.path.join(run_dir, 'training_options.json'), 'w') as json_file:
+        json.dump(existing_data, json_file, indent=2)
+
+    ## -------------- --------------------------- -----------------------
 
 
     # Setup training phases.
@@ -639,7 +664,6 @@ def training_loop(
             save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=[-1,1], grid_size=grid_size)
             save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[images_mask.min(), images_mask.max()], grid_size=grid_size)
             save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[0,1], grid_size=grid_size)
-            
             
             
             save_override_color = getattr(G_ema, 'use_colors_precomp')
