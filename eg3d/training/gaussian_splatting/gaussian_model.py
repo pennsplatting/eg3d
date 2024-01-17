@@ -45,7 +45,7 @@ args.save_iterations.append(args.iterations)
 
 gs_training_args = op.extract(args)
 # print(f"gs_training_args: {vars(gs_training_args)}")
-fix_opacity_scaling_rotation=True
+fix_opacity_scaling_rotation=False
 print(f"You choose to fix_opacity_scaling_rotation:{fix_opacity_scaling_rotation}")
 if fix_opacity_scaling_rotation:
     gs_training_args.opacity_lr=0

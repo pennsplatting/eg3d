@@ -186,6 +186,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # Add other boolean attributes here
             "gaussian_splatting_use_sr": self.gaussian_splatting_use_sr,
             "use_colors_precomp": self.use_colors_precomp,
+            "sh_degree(start)": self.g1.active_sh_degree,
             "sh_degree(max)": self.sh_degree,
             "num_gaussians": self.num_gaussians,
             "gassian render background": 'white' if self.white_background else 'black',
