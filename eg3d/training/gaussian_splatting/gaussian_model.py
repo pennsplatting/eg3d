@@ -242,10 +242,10 @@ class GaussianModel:
         
         # features.requires_grad_(True)
         # features.register_hook(lambda grad: print_grad("------features.requires_grad", grad))
-        self._xyz.register_hook(lambda grad: print_grad("------_xyz.requires_grad", grad))
-        self._scaling.register_hook(lambda grad: print_grad("------_scaling.requires_grad", grad))
-        self._rotation.register_hook(lambda grad: print_grad("------_rotation.requires_grad", grad))
-        self._opacity.register_hook(lambda grad: print_grad("------_opacity.requires_grad", grad))
+        # self._xyz.register_hook(lambda grad: print_grad("------_xyz.requires_grad", grad))
+        # self._scaling.register_hook(lambda grad: print_grad("------_scaling.requires_grad", grad))
+        # self._rotation.register_hook(lambda grad: print_grad("------_rotation.requires_grad", grad))
+        # self._opacity.register_hook(lambda grad: print_grad("------_opacity.requires_grad", grad))
         
         # self._features_dc.requires_grad_(True)
         # self._features_dc.register_hook(lambda grad: print_grad("------self._features_dc.requires_grad", grad))
