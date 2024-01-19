@@ -136,7 +136,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 1
+        self.num_gaussians = 500
         print(f"We have init {self.num_gaussians} gaussians.\n")  
 
         # by default
@@ -188,13 +188,19 @@ class TriPlaneGenerator(torch.nn.Module):
         self.gaussian_debug = GaussianModel(self.sh_degree, copy.deepcopy(self.verts))
         self.gaussian_debug.update_rgb_textures(self.verts_rgb)
         
+        self.noSigmoid = True
+        
         # texture decoder: the output dim is aware of whether use rgb or sh to render gaussian, controled by use_colors_precomp
         if ('UV' in self.feature_structure):
             # decode -> UV sample
-            self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+            if self.noSigmoid:   
+                self.text_decoder = TextureDecoder_noSigmoid(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+            else:
+                self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+            
         else:
             # triplane sample -> decode
-            self.text_decoder = TextureDecoder2(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+            self.text_decoder = TextureDecoder_triplane(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
             
             
     def keep_only_front_face_UV(self):
@@ -225,6 +231,8 @@ class TriPlaneGenerator(torch.nn.Module):
             "gaussian bank init": 'same' if self.init_from_the_same_canonical else f'different_{self.num_gaussians}',
             # Add more attributes as needed
             "feature_structure": self.feature_structure,
+            "texture_decoder":self.text_decoder.__class__.__name__,
+
         }
         
         return attributes_to_record
@@ -556,6 +564,37 @@ class OSGDecoder(torch.nn.Module):
         return {'rgb': rgb, 'sigma': sigma}
 
 # decode features to SH
+class TextureDecoder_noSigmoid(torch.nn.Module):
+    def __init__(self, n_features, options):
+        super().__init__()
+        self.hidden_dim = 64
+
+        self.net = torch.nn.Sequential(
+            FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
+            torch.nn.Softplus(),
+            FullyConnectedLayer(self.hidden_dim, options['decoder_output_dim'], lr_multiplier=options['decoder_lr_mul'])
+        )
+        
+    def forward(self, sampled_features):
+      
+        # features (4, 96, 256, 256) -> (4, 16*3, 256, 256)
+        # Aggregate features
+    
+        sampled_features = sampled_features.permute(0,2,3,1)
+        x = sampled_features
+        N, H, W, C = x.shape 
+        x = x.reshape(N*H*W, C)
+        
+        x = self.net(x)
+        
+        ## added sigmoid to make x in range 0~1
+        # st()
+        # x = torch.sigmoid(x)*(1 + 2*0.001) - 0.001
+    
+        x = x.reshape(N, H, W, -1)
+        return x.permute(0, 3, 1, 2)
+    
+# decode features to SH
 class TextureDecoder(torch.nn.Module):
     def __init__(self, n_features, options):
         super().__init__()
@@ -585,7 +624,7 @@ class TextureDecoder(torch.nn.Module):
         x = x.reshape(N, H, W, -1)
         return x.permute(0, 3, 1, 2)
 
-class TextureDecoder2(torch.nn.Module):
+class TextureDecoder_triplane(torch.nn.Module):
     def __init__(self, n_features, options):
         super().__init__()
         self.hidden_dim = 64
