@@ -75,10 +75,11 @@ class GaussianModel:
         self.rotation_activation = torch.nn.functional.normalize
 
 
-    def __init__(self, sh_degree : int, verts, index=-1, active_sh_degree=1):
+    def __init__(self, sh_degree : int, verts, index=-1, active_sh_degree=0):
         self.active_sh_degree = min(active_sh_degree, sh_degree)
         
         self.update_iterations = 0 # to record how many times this gaussian has been updated. for the use of oneupSHdegree()
+        self.update_interval = 10000
         self.max_sh_degree = sh_degree 
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
@@ -303,7 +304,7 @@ class GaussianModel:
         self.update_iterations += 1 # do this before update. start from activeSH=0
         # print(f"gs_{self.index} at iteration {self.update_iterations}")
         
-        if self.update_iterations % 1000 == 0:
+        if self.update_iterations % self.update_interval == 0:
             self.oneupSHdegree()
             print(f"gs{self.index} now has {self.active_sh_degree} active_sh_degree")
         
@@ -336,21 +337,8 @@ class GaussianModel:
         # print(f"--shs: min={shs.min()}, max={shs.max()}, mean={shs.mean()}, shape={shs.shape}")
         features = torch.zeros((self._xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
         ## FIXME: although all features are mapped from RGB[0,1] to SH now, the original GS uses 0 for self._feature_rest
-        features[:,:3, 0] = RGB2SH(feature_uv) # (53215, 3)
+        features[:,:3, 0] = RGB2SH(feature_uv) # (53215, 3): 0~1 -> -1.7~+1.7
         features[:, 3:, 1:] = 0.0
-
-        # self.active_sh_degree = self.max_sh_degree
-
-        # print("Number of points at initialisation : ", xyz.shape[0])
-
-        # dist2 = torch.clamp_min(distCUDA2(self._xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
-        # scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
-        # rots = torch.zeros((self._xyz.shape[0], 4), device="cuda")
-        # rots[:, 0] = 1
-
-        # opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
-        # FIXME: init opacities with all 1s?
-        # opacities = torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda") 
 
         # self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(False))
         self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True)

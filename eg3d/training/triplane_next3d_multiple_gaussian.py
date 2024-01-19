@@ -136,7 +136,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 500
+        self.num_gaussians = 1
         print(f"We have init {self.num_gaussians} gaussians.\n")  
 
         # by default
@@ -219,6 +219,7 @@ class TriPlaneGenerator(torch.nn.Module):
             "use_colors_precomp": self.use_colors_precomp,
             "sh_degree(start)": self.g1.active_sh_degree,
             "sh_degree(max)": self.sh_degree,
+            "update interval": self.g1.update_interval,
             "num_gaussians": self.num_gaussians,
             "gassian render background": 'white' if self.white_background else 'black',
             "gaussian bank init": 'same' if self.init_from_the_same_canonical else f'different_{self.num_gaussians}',
