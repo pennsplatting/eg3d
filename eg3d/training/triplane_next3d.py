@@ -18,6 +18,9 @@ from training.volumetric_rendering.ray_sampler import RaySampler
 import dnnlib
 
 from ipdb import set_trace as st
+from training.gaussian_splatting.utils.system_utils import mkdir_p
+from torchvision.utils import save_image
+import os
 import cv2
 import torch.nn as nn
 import torch.nn.functional as F
@@ -85,6 +88,7 @@ class TriPlaneGenerator(torch.nn.Module):
         ### TODO: -------- 3dmm face model --------
         self.uv_resolution = 256
         self.verts = None
+        self.textures_gen = None
         self.load_face_model()
         ### -------- 3dmm face model [end] --------
 
@@ -348,6 +352,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
 
                 ## TODO: can gaussiam splatting run batch in parallel?
+                self.textures_gen = textures_gen[:3,:,:]
                 textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 48, 1, 5023)
                 # textures.requires_grad_(True) 
                 # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
@@ -371,10 +376,10 @@ class TriPlaneGenerator(torch.nn.Module):
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
-            rgb_image = torch.where(alpha_image>0, rgb_image, bg)
+            # rgb_image = torch.where(alpha_image>0, rgb_image, bg)
             
             real_image = torch.cat(real_image_batch)
-            real_image = torch.where(alpha_image>0, real_image, bg)
+            # real_image = torch.where(alpha_image>0, real_image, bg)
             ## FIXME: try different normalization method to normalize rgb image to [-1,1]
             rgb_image = (rgb_image - 0.5) * 2
             real_image = (real_image - 0.5) * 2
@@ -411,7 +416,11 @@ class TriPlaneGenerator(torch.nn.Module):
         face_model = tdmmModel.fit_feature_planes(planes)
         ## TODO2: check whether the self.decoder can be kept or not
         return self.renderer.run_model(face_model, self.decoder, coordinates, directions, self.rendering_kwargs)
-
+    
+    def save_texture(self, path):
+        mkdir_p(os.path.dirname(path))
+        save_image(self.textures_gen, path)
+        
 
     def sample_mixed(self, coordinates, directions, ws, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
         # Same as sample, but expects latent vectors 'ws' instead of Gaussian noise 'z'

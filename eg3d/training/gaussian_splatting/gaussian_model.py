@@ -49,8 +49,8 @@ class GaussianModel:
 
     def __init__(self, sh_degree : int, verts):
         # self.active_sh_degree = 0
-        self.active_sh_degree = sh_degree
-        self.max_sh_degree = sh_degree  
+        self.active_sh_degree = 0
+        self.max_sh_degree = 0  
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
@@ -169,7 +169,7 @@ class GaussianModel:
         rots = torch.zeros((self._xyz.shape[0], 4), device="cuda")
         rots[:, 0] = 1
 
-        opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
+        opacities = inverse_sigmoid(torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
         # opacities = torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda")
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
