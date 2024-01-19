@@ -21,7 +21,6 @@ from ipdb import set_trace as st
 from training.gaussian_splatting.utils.system_utils import mkdir_p
 from torchvision.utils import save_image
 import os
-import cv2
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -56,7 +55,7 @@ class TriPlaneGenerator(torch.nn.Module):
         w_dim,                      # Intermediate latent (W) dimensionality.
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
-        sh_degree           = 3,    # Spherical harmonics degree.
+        sh_degree           = 0,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
         rendering_kwargs    = {},
