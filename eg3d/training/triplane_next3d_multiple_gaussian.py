@@ -34,11 +34,14 @@ import copy
 import trimesh
 import os
 
+from scipy.io import loadmat
+import os.path as osp
 
 # FIXME: replace with gt texture for debug
 # import sys
 # sys.path.append('/home/zxy/eg3d/eg3d/data')
 # from gt.get_uv_texture import get_uv_texture
+
 
 def load_mesh_to_tensor(file_path, return_color=False, device='cuda'):
     mesh = trimesh.load(file_path, process=False)
@@ -130,16 +133,14 @@ class TriPlaneGenerator(torch.nn.Module):
             image_size = 512
         z_near, z_far = 0.1, 2 # TODO: find suitable value for this
         
-        # FIXME: gt, init with verts_rgb
-        self.gaussian_debug = GaussianModel(self.sh_degree, copy.deepcopy(self.verts))
-        self.gaussian_debug.update_rgb_textures(self.verts_rgb)
-        
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
         self.num_gaussians = 500
         print(f"We have init {self.num_gaussians} gaussians.\n")  
-        
+
+        # by default
+        self.feature_structure = 'Triplane' 
         
         # raterization
         self.white_background = True
@@ -148,17 +149,14 @@ class TriPlaneGenerator(torch.nn.Module):
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         self.init_from_the_same_canonical = False
-        # the decoder output dim is aware of whether use rgb or sh to render gaussian, controled by use_colors_precomp
+        
         if self.init_from_the_same_canonical:
-            # decode -> UV sample
-            self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+            self.feature_structure = f'UV_{self.raw_uvcoords.shape[1]}'
             
             # init gaussian bank from the same canonical face
             for i in range(1, self.num_gaussians+1): 
                 setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(self.verts), i))
         else:
-            # triplane sample -> decode
-            self.text_decoder = TextureDecoder2(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
             
             # init gaussian bank from regressed 3DMM parameters
             target_mean = self.verts.mean(dim=0)
@@ -179,6 +177,39 @@ class TriPlaneGenerator(torch.nn.Module):
                 vertices = (vertices - vertices.mean(dim=0)) * scale_factor + target_mean
                 setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(vertices), i))
             self.plane_axes_gs = generate_planes().to(self.verts.device)
+            
+            # load reduced index for front face only model
+            self.keep_only_front_face_UV()
+            
+        
+        # all the following things must be executed after "self->keep_only_front_face_UV()"
+        
+        # gt, init with verts_rgb
+        self.gaussian_debug = GaussianModel(self.sh_degree, copy.deepcopy(self.verts))
+        self.gaussian_debug.update_rgb_textures(self.verts_rgb)
+        
+        # texture decoder: the output dim is aware of whether use rgb or sh to render gaussian, controled by use_colors_precomp
+        if ('UV' in self.feature_structure):
+            # decode -> UV sample
+            self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+        else:
+            # triplane sample -> decode
+            self.text_decoder = TextureDecoder2(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
+            
+            
+    def keep_only_front_face_UV(self):
+        bfm_folder = '/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/BFM'
+        index_exp = loadmat(osp.join(bfm_folder, 'BFM_front_idx.mat'))
+        index_exp = index_exp['idx'].astype(np.int32) - 1  # starts from 0 (to 53215)
+        
+        assert hasattr(self, 'raw_uvcoords')
+        assert int(index_exp.shape[0]) == int(self.g1._xyz.shape[0])
+               
+        self.raw_uvcoords = self.raw_uvcoords[0][index_exp].permute(1,0,2)
+        self.verts = self.verts[index_exp].squeeze(1)
+        self.verts_rgb = self.verts_rgb[index_exp].squeeze(1)
+        
+        self.feature_structure = f'UV_{self.raw_uvcoords.shape[1]}'
 
     def record_attributes_to_json(self):
         
@@ -192,6 +223,7 @@ class TriPlaneGenerator(torch.nn.Module):
             "gassian render background": 'white' if self.white_background else 'black',
             "gaussian bank init": 'same' if self.init_from_the_same_canonical else f'different_{self.num_gaussians}',
             # Add more attributes as needed
+            "feature_structure": self.feature_structure,
         }
         
         return attributes_to_record
@@ -381,7 +413,7 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image = feature_image[:, :3] # rgb: torch.Size([4, 3, 64, 64]), feature_image: torch.Size([4, 32, 64, 64])
             st() # check feature image.shape
             sr_image = self.superresolution(rgb_image, feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
-            
+
             
             ### ----- original eg3d version [END] ----- 
         
@@ -391,7 +423,7 @@ class TriPlaneGenerator(torch.nn.Module):
             ### ----- gaussian splatting -----
             # Reshape output into three 32-channel planes
             ## TODO: convert from triplane to 3DMM here, maybe need a net to decode the feature to RGB or SH
-            if self.init_from_the_same_canonical:
+            if ('UV' in self.feature_structure):
                 textures_gen_batch = self.text_decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256), range [0,1]
             else:
                 textures_gen_batch = planes.view(len(planes), 3, 32, planes.shape[-2], planes.shape[-1]) # torch.Size([4, 3, 32, 256, 256])
@@ -421,14 +453,13 @@ class TriPlaneGenerator(torch.nn.Module):
                 current_gaussian = self.get_a_gaussian()
                 self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
 
-                if self.init_from_the_same_canonical:
+                if ('UV' in self.feature_structure):
                     textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 48, 1, N_pts)
-                    # st()
-                else:
+            
+                else:        
                     # do not have existing UV map for regressed 3DMM models. Directly sample feature from triplane, to ensure continuity
                     triplane_textures = sample_from_planes(self.plane_axes_gs, textures_gen[None], current_gaussian._xyz[None], padding_mode='zeros', box_warp=self.rendering_kwargs['box_warp']) # triplane_textures -> [1, 3, 35709, 32]
                     textures = self.text_decoder(triplane_textures) # textures -> (1, C, 1, N_pts), C=3 when use_colors_precomp, C=48 when use SH.
-                
                 
                 if self.use_colors_precomp:
                     override_color = textures[0,:3,0].permute(1,0) # override_color -> [Npts, 3], range in [0,1]
