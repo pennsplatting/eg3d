@@ -188,7 +188,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.gaussian_debug = GaussianModel(self.sh_degree, copy.deepcopy(self.verts))
         self.gaussian_debug.update_rgb_textures(self.verts_rgb)
         
-        self.noSigmoid = True
+        self.noSigmoid = False
         
         # texture decoder: the output dim is aware of whether use rgb or sh to render gaussian, controled by use_colors_precomp
         if ('UV' in self.feature_structure):
@@ -231,7 +231,8 @@ class TriPlaneGenerator(torch.nn.Module):
             "gaussian bank init": 'same' if self.init_from_the_same_canonical else f'different_{self.num_gaussians}',
             # Add more attributes as needed
             "feature_structure": self.feature_structure,
-            "texture_decoder":self.text_decoder.__class__.__name__,
+            "texture_decoder": self.text_decoder.__class__.__name__,
+            "texture_decoder output scale": getattr(self.text_decoder, 'output_scale', None),
 
         }
         
@@ -605,6 +606,8 @@ class TextureDecoder(torch.nn.Module):
             torch.nn.Softplus(),
             FullyConnectedLayer(self.hidden_dim, options['decoder_output_dim'], lr_multiplier=options['decoder_lr_mul'])
         )
+
+        self.output_scale = 20
         
     def forward(self, sampled_features):
       
@@ -620,6 +623,8 @@ class TextureDecoder(torch.nn.Module):
         
         ## added sigmoid to make x in range 0~1
         x = torch.sigmoid(x)*(1 + 2*0.001) - 0.001
+        
+        x = x * self.output_scale - self.output_scale/2
     
         x = x.reshape(N, H, W, -1)
         return x.permute(0, 3, 1, 2)
