@@ -141,7 +141,7 @@ class TriPlaneGenerator(torch.nn.Module):
         print(f"We have init {self.num_gaussians} gaussians.\n")  
 
         # by default
-        self.feature_structure = 'Triplane' 
+        self.feature_structure = 'UV'
         
         # raterization
         self.white_background = True
