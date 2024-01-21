@@ -332,6 +332,10 @@ class GaussianModel:
         
     ## for assigning rgb texture to G.debug_gaussian. Not for other gaussians
     def update_rgb_textures(self, feature_uv):
+        '''
+            feature_uv: [Npts, 3]
+        '''
+
         # N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
         # features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
         # print(f"--shs: min={shs.min()}, max={shs.max()}, mean={shs.mean()}, shape={shs.shape}")
