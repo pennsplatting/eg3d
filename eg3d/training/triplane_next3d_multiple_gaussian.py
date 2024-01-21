@@ -118,7 +118,8 @@ class TriPlaneGenerator(torch.nn.Module):
         # use colors_precomp instead of shs in gaussian_model.render()
         self.use_colors_precomp = False
         # when use_colors_precomp, SHdegree=0
-        sh_degree = sh_degree * (1-self.use_colors_precomp)
+        # sh_degree = sh_degree * (1-self.use_colors_precomp)
+        sh_degree = 0
         print(f"G->SHdegree={sh_degree}, use_colors_precomp={self.use_colors_precomp}")
         self.sh_degree = sh_degree
     
@@ -188,7 +189,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.gaussian_debug = GaussianModel(self.sh_degree, copy.deepcopy(self.verts))
         self.gaussian_debug.update_rgb_textures(self.verts_rgb)
         
-        self.text_decoder_class = 'TextureDecoder_allAttributes'
+        self.text_decoder_class = 'TextureDecoder_noSigmoid'
         assert self.text_decoder_class in ['TextureDecoder', 'TextureDecoder_noSigmoid', 'TextureDecoder_allAttributes']
         
         # texture decoder: the output dim is aware of whether use rgb or sh to render gaussian, controled by use_colors_precomp
@@ -473,7 +474,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 if ('UV' in self.feature_structure):
                     textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 48, 1, N_pts)
             
-                else:        
+                else: 
                     # do not have existing UV map for regressed 3DMM models. Directly sample feature from triplane, to ensure continuity
                     triplane_textures = sample_from_planes(self.plane_axes_gs, textures_gen[None], current_gaussian._xyz[None], padding_mode='zeros', box_warp=self.rendering_kwargs['box_warp']) # triplane_textures -> [1, 3, 35709, 32]
                     textures = self.text_decoder(triplane_textures) # textures -> (1, C, 1, N_pts), C=3 when use_colors_precomp, C=48 when use SH.

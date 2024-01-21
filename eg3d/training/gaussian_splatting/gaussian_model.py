@@ -243,7 +243,7 @@ class GaussianModel:
         # TODO: freeze some parameters, like self._xyz?
         self._xyz = nn.Parameter(verts)
         self.spatial_lr_scale = 0 # FIXME: hardcoded from original GS implementation, explained by authors in issue
-        print(f"self.spatial_lr_scale:{self.spatial_lr_scale}")
+        # print(f"self.spatial_lr_scale:{self.spatial_lr_scale}")
         
 
         dist2 = torch.clamp_min(distCUDA2(self._xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
@@ -301,12 +301,14 @@ class GaussianModel:
     
     # to update gaussian bank
     def update_textures(self, feature_uv):
-        self.update_iterations += 1 # do this before update. start from activeSH=0
-        # print(f"gs_{self.index} at iteration {self.update_iterations}")
+        # self.update_iterations += 1 # do this before update. start from activeSH=0
+        # # print(f"gs_{self.index} at iteration {self.update_iterations}")
         
-        if self.update_iterations % self.update_interval == 0:
-            self.oneupSHdegree()
-            print(f"gs{self.index} now has {self.active_sh_degree} active_sh_degree")
+        # if self.update_iterations % self.update_interval == 0:
+        #     self.oneupSHdegree()
+        #     print(f"gs{self.index} now has {self.active_sh_degree} active_sh_degree")
+            
+        # print(f"feature_uv min={feature_uv.min()}, max={feature_uv.max()}")
         
         N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
         features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']

@@ -575,7 +575,7 @@ def training_loop(
                             _gs.optimizer.step()
                             _gs.optimizer.zero_grad(set_to_none = True)
                             # print(f"gs{_gi}._xyz has changed: {torch.any(G.gaussian_debug._xyz != _gs._xyz )}")
-                            print(f'---the gs {_gi} xyz has changed: {torch.any(getattr(G_ema, f"g{_gi}")._xyz != _gs._xyz )}')
+                            # print(f'---the gs {_gi} xyz has changed: {torch.any(getattr(G_ema, f"g{_gi}")._xyz != _gs._xyz )}')
             
                             
                 elif 'D' in phase.name:
@@ -683,7 +683,7 @@ def training_loop(
                 # print(f"gs in updated gaussians: {gs_i in past_phases}")
                 try:
                     _gs.save_ply(os.path.join(run_dir, f"./fake_3dmm_{gs_i}.ply"),save_override_color=save_override_color)
-                    print(f"Saved sucessfully the {gs_i}th gaussian")
+                    # print(f"Saved sucessfully the {gs_i}th gaussian")
                 except:
                     print(f"The {gs_i}th gaussian not updated yet")
                     pass
