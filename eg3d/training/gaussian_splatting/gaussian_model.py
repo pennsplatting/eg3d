@@ -330,6 +330,8 @@ class GaussianModel:
         # self._scaling.register_hook(lambda grad: print_grad("------_scaling.requires_grad", grad))
         # self._rotation.register_hook(lambda grad: print_grad("------_rotation.requires_grad", grad))
         # self._opacity.register_hook(lambda grad: print_grad("------_opacity.requires_grad", grad))
+    
+    def update_all_textures(self, feature_uv):
         
         
     ## for assigning rgb texture to G.debug_gaussian. Not for other gaussians
