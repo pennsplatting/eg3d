@@ -10,7 +10,8 @@
 
 import torch
 from torch_utils import persistence
-from training.networks_stylegan2 import Generator as StyleGAN2Backbone
+# from training.networks_stylegan2 import Generator as StyleGAN2Backbone
+from training.networks_stylegan2_old import Generator as StyleGAN2Backbone
 from training.volumetric_rendering.renderer import ImportanceRenderer, sample_from_planes, generate_planes
 from training.volumetric_rendering.ray_sampler import RaySampler
 import dnnlib
@@ -137,7 +138,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 500
+        self.num_gaussians = 5
         print(f"We have init {self.num_gaussians} gaussians.\n")  
 
         # by default
@@ -188,6 +189,7 @@ class TriPlaneGenerator(torch.nn.Module):
         # gt, init with verts_rgb
         self.gaussian_debug = GaussianModel(self.sh_degree, copy.deepcopy(self.verts))
         self.gaussian_debug.update_rgb_textures(self.verts_rgb)
+        # st()
         
         self.text_decoder_class = 'TextureDecoder_noSigmoid'
         assert self.text_decoder_class in ['TextureDecoder', 'TextureDecoder_noSigmoid', 'TextureDecoder_allAttributes']
@@ -528,6 +530,7 @@ class TriPlaneGenerator(torch.nn.Module):
             real_image = torch.cat(real_image_batch)
             ## FIXME: try different normalization method to normalize rgb image to [-1,1]
             rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
+            # print(f"rgb_image:{rgb_image.shape}")
     
             
             ## TODO: the below superresolution shall be kept?

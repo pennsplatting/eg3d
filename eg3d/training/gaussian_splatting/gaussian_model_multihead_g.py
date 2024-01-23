@@ -60,7 +60,7 @@ def print_grad(name, grad):
     # print(grad)
     print('\t',grad.max(), grad.min(), grad.mean())
     
-class GaussianModel:
+class GaussianModel_MHG:
 
     def setup_functions(self):
         
@@ -73,6 +73,9 @@ class GaussianModel:
         self.inverse_opacity_activation = inverse_sigmoid
 
         self.rotation_activation = torch.nn.functional.normalize
+    
+    def rgb_activation(self, x):
+        return torch.sigmoid(x)*(1 + 2*0.001) - 0.001 # follow mip-nerf
 
 
     def __init__(self, sh_degree : int, verts, index=-1, active_sh_degree=0):
@@ -83,7 +86,8 @@ class GaussianModel:
         self.max_sh_degree = sh_degree 
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
-        self._features_rest = torch.empty(0)
+        # self._features_rest = torch.empty(0)
+        self._features_rest = torch.zeros((self._xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2-1)).float().cuda().transpose(1, 2).contiguous()
         self._scaling = torch.empty(0)
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
@@ -98,8 +102,11 @@ class GaussianModel:
         self.index = index
         self.training_setup(gs_training_args)
         # print(f"init gs_{self.index} has activeSH={self.active_sh_degree}; maxSH={self.max_sh_degree}")
-    
+        self.use_gen_opacity = False
+        self.use_gen_scaling = False
+        self.features_dc_is_rgb = True
 
+    
     def capture(self):
         return (
             self.active_sh_degree,
@@ -118,11 +125,11 @@ class GaussianModel:
     
     def get_copy(self):
         # Create a new instance of GaussianModel
-        copied_instance = GaussianModel(sh_degree=self.max_sh_degree, verts=self._xyz, index=self.index, active_sh_degree=self.active_sh_degree)
+        copied_instance = GaussianModel_MHG(sh_degree=self.max_sh_degree, verts=self._xyz, index=self.index, active_sh_degree=self.active_sh_degree)
 
         # Copy the necessary attributes
         copied_instance._xyz = self._xyz.clone().detach()  # Detach if needed
-        copied_instance._features_dc = self._features_dc.clone().detach()
+        copied_instance._features_dc = self._features_dc.clone().detach()   
         copied_instance._features_rest = self._features_rest.clone().detach()
         copied_instance._scaling = self._scaling.clone().detach()
         copied_instance._rotation = self._rotation.clone().detach()
@@ -142,7 +149,8 @@ class GaussianModel:
         """
         # Define your logic to return parameters here
         # For example, if your parameters are stored in a list, you can return that list
-        return [self._xyz, self._scaling, self._rotation, self._opacity]
+        # return [self._xyz, self._scaling, self._rotation, self._opacity]
+        return [self._xyz]
         ## FIXME: self._features_dc, self._features_rest: non-leaf tensors, cannot requries grad=False
 
     
@@ -192,7 +200,9 @@ class GaussianModel:
     
     @property
     def get_features(self):
-        features_dc = self._features_dc
+        features_dc = self._features_dc # assume this is already in rgb for GaussianModel_MHG 
+        # print(f"{self.index}: features_dc = {features_dc.shape}")
+        return features_dc
         features_rest = self._features_rest
         
         # features_dc.requires_grad_(True)
@@ -332,11 +342,33 @@ class GaussianModel:
         # self._opacity.register_hook(lambda grad: print_grad("------_opacity.requires_grad", grad))
     
     def update_all_textures(self, features_dc, opacity, scaling, rotation):
-       
-        self._features_dc = features_dc
-        self._opacity = opacity 
-        self._scaling = scaling
+        
+        if self.features_dc_is_rgb:
+            self._features_dc = self.rgb_activation(features_dc) # [Npts, 3]
+        else:
+            self._features_dc = features_dc.unsqueeze(1) # [Npts, 1, 3]
+        
+        if self.use_gen_opacity:
+            self._opacity = opacity # TODO: allowing update of opacity and scaling will cause artifacts in the head part. This may be utilzied to generate hairs
+        if self.use_gen_scaling:
+            self._scaling = scaling
         self._rotation = rotation
+        
+        return 
+    
+    def update_all_textures2(self, features):
+        
+        if self.features_dc_is_rgb:
+            self._features_dc = self.rgb_activation(features[..., :3]).contiguous() # [Npts, 3]
+        else:
+            self._features_dc = features[..., :3].unsqueeze(1).contiguous() # [Npts, 1, 3]
+        # print(f"self._features_dc {self._features_dc.shape}, self.features_dc_is_rgb {self.features_dc_is_rgb}")
+        
+        if self.use_gen_opacity:
+            self._opacity = features[..., 3:4] # TODO: allowing update of opacity and scaling will cause artifacts in the head part. This may be utilzied to generate hairs
+        if self.use_gen_scaling:
+            self._scaling = features[..., 4:7]
+        self._rotation = features[..., 7:]
         
         return 
 
@@ -351,14 +383,21 @@ class GaussianModel:
         # N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
         # features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
         # print(f"--shs: min={shs.min()}, max={shs.max()}, mean={shs.mean()}, shape={shs.shape}")
-        features = torch.zeros((self._xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        # features = torch.zeros((self._xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
         ## FIXME: although all features are mapped from RGB[0,1] to SH now, the original GS uses 0 for self._feature_rest
-        features[:,:3, 0] = RGB2SH(feature_uv) # (53215, 3): 0~1 -> -1.7~+1.7
-        features[:, 3:, 1:] = 0.0
+        # features[:,:3, 0] = RGB2SH(feature_uv) # (53215, 3): 0~1 -> -1.7~+1.7
+        if self.features_dc_is_rgb:
+            self._features_dc = feature_uv.contiguous()
+        else:
+            self._features_dc = RGB2SH(feature_uv[..., None].transpose(1, 2).contiguous())
+            print(" RGB2SH(")
+        # st()
+        # features[:,:3, 0] = feature_uv # assume feature_dc is already in RGB for GaussionModel_MHG
+        # features[:, 3:, 1:] = 0.0
 
         # self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(False))
-        self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True)
-        self._features_rest = features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True)
+        # self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True)
+        # self._features_rest = features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True)
         
         # features.requires_grad_(True)
         # features.register_hook(lambda grad: print_grad("------features.requires_grad", grad))
@@ -446,8 +485,12 @@ class GaussianModel:
     def construct_list_of_attributes(self):
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
         # All channels except the 3 DC
-        for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]): # V, 3, 16
+        # st()
+        for i in range(self._features_dc.flatten(start_dim=1).shape[-1]):
             l.append('f_dc_{}'.format(i))
+        # st()
+        # for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]): # V, 3, 16
+        #     l.append('f_dc_{}'.format(i))
         for i in range(self._features_rest.shape[1]*self._features_rest.shape[2]):
             l.append('f_rest_{}'.format(i))
         l.append('opacity')
@@ -458,21 +501,33 @@ class GaussianModel:
         return l
 
     def save_ply(self, path, save_override_color=False):
+        
+            
         if not save_override_color:
             mkdir_p(os.path.dirname(path))
 
             xyz = self._xyz.detach().cpu().numpy()
             normals = np.zeros_like(xyz)
-            f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-            f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+            if self.features_dc_is_rgb:
+                f_dc = self._features_dc.detach().contiguous().cpu().numpy()
+            else:
+                f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+            
+            if self._features_rest.shape[0] > 0:
+                f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+
             opacities = self._opacity.detach().cpu().numpy()
             scale = self._scaling.detach().cpu().numpy()
             rotation = self._rotation.detach().cpu().numpy()
 
             dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
-
+            
             elements = np.empty(xyz.shape[0], dtype=dtype_full)
-            attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+            
+            if self._features_rest.shape[0] > 0:
+                attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+            else:
+                attributes = np.concatenate((xyz, normals, f_dc, opacities, scale, rotation), axis=1)
             elements[:] = list(map(tuple, attributes))
             el = PlyElement.describe(elements, 'vertex')
             PlyData([el]).write(path)
@@ -482,7 +537,10 @@ class GaussianModel:
 
             xyz = self._xyz.detach().cpu().numpy()
             normals = np.zeros_like(xyz)
-            f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+            if self.features_dc_is_rgb:
+                f_dc = self._features_dc.detach().contiguous().cpu().numpy()
+            else:
+                f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
             f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
             opacities = self._opacity.detach().cpu().numpy()
             scale = self._scaling.detach().cpu().numpy()

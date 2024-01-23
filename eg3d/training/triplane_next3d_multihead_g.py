@@ -22,7 +22,8 @@ import cv2
 import torch.nn as nn
 import torch.nn.functional as F
 
-from training.gaussian_splatting.gaussian_model import GaussianModel
+# from training.gaussian_splatting.gaussian_model import GaussianModel
+from training.gaussian_splatting.gaussian_model_multihead_g import GaussianModel_MHG as GaussianModel
 from training.gaussian_splatting.cameras import MiniCam
 from training.gaussian_splatting.renderer import render as gs_render
 from training.gaussian_splatting.utils.graphics_utils import getWorld2View, getProjectionMatrix
@@ -73,6 +74,13 @@ def print_grad(name, grad):
         return 
     # print(grad)
     print('\t',grad.max(), grad.min(), grad.mean())
+
+class PipelineParams():
+        def __init__(self):
+            self.convert_SHs_python = True
+            self.compute_cov3D_python = False
+            self.debug = False
+
     
 @persistence.persistent_class
 class TriPlaneGenerator(torch.nn.Module):
@@ -92,7 +100,7 @@ class TriPlaneGenerator(torch.nn.Module):
         lr_multiplier_rotation=1.0,
         old_init            = False,
         tex_init_res =  128,
-        tex_final_res = 512,
+        tex_final_res = 256,
         progressive_tex = False,
         sr_num_fp16_res     = 0,
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
@@ -143,6 +151,8 @@ class TriPlaneGenerator(torch.nn.Module):
 
         if decode_first == 'wo_color':
             self.torgb_color = Attdecoder(img_channels, num_shells*3, lr_multiplier=lr_multiplier_color)
+            
+        self.pipeline = PipelineParams()
         # ------------------------------------------------------------
 
         self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
@@ -186,7 +196,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 5
+        self.num_gaussians = 500
         print(f"We have init {self.num_gaussians} gaussians.\n")  
 
         # by default
@@ -290,6 +300,15 @@ class TriPlaneGenerator(torch.nn.Module):
             "feature_structure": self.feature_structure,
             "texture_decoder": self.text_decoder.__class__.__name__,
             "texture_decoder output scale": getattr(self.text_decoder, 'output_scale', None),
+            # about texture map from 
+            "progressive_tex": self.progressive_tex,
+            "tex_init_res": self.tex_init_res,
+            "tex_final_res": self.tex_final_res,
+            # GS model
+            "GS model class": self.gaussian_debug.__class__.__name__,
+            "GS use gen opacity": self.gaussian_debug.use_gen_opacity,
+            "GS use gen scaling": self.gaussian_debug.use_gen_scaling,
+            "GS use features_dc_is_rgb": self.gaussian_debug.features_dc_is_rgb,
 
         }
         
@@ -440,6 +459,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 replace_idx = None, replace_color = None, replace_opacity = None,
                 replace_scale = None, replace_rotation = None, 
                 **synthesis_kwargs):
+                ## the "replace_xx" arguments are None
 
         
         cam2world_matrix = c[:, :16].view(-1, 4, 4)
@@ -514,104 +534,78 @@ class TriPlaneGenerator(torch.nn.Module):
             self._last_planes = planes
 
         ### ----- gaussian splatting -----
+
+        override_color = None
        
         rgb_image_batch = []
         alpha_image_batch = [] # mask
         real_image_batch = []
         
-        # planes -> [4, 1, 512, 512, 11]
-        for bs in range(len(planes)):
-            # planes[bs] -> [1, 512, 512, 11]
-            st()
-            if self.decode_first == 'all':
-                self.gaussians.set_texture(planes[bs])
-                self.gaussians.set_features_dc(planes[bs][..., :3] )
-                self.gaussians.set_opacity(planes[bs][..., 3:4] )
-                self.gaussians.set_scaling(planes[bs][..., 4:7])
-                self.gaussians.set_rotation(planes[bs][..., 7:])
-            elif self.decode_first == 'wo_color':
-                self.gaussians.set_texture(planes[bs])
-                self.gaussians.set_features_dc(planes_color[bs], self.torgb_color)
-                self.gaussians.set_opacity(planes[bs][..., 0:1] )
-                self.gaussians.set_scaling(planes[bs][..., 1:4])
-                self.gaussians.set_rotation(planes[bs][..., 4:])
-            else:
-                self.gaussians.set_texture(planes[bs])
-                self.gaussians.set_features_dc(planes[bs], self.torgb_color)
-                self.gaussians.set_opacity(planes[bs], self.torgb_opacity)
-                self.gaussians.set_scaling(planes[bs], self.torgb_scaling)
-                self.gaussians.set_rotation(planes[bs], self.torgb_rotation)
-
         
-        ## TODO: can gaussiam splatting run batch in parallel?
-        # for world_view_transform, textures_gen in zip(world_view_transform_batch, textures_gen_batch):
-        for _cam2world_matrix, textures_gen in zip(cam2world_matrix, textures_gen_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
-            # randomly select a new gaussian for each rendering
+        planes = planes.permute(0,1,4,2,3) # planes: [4, 1, 512, 512, 11] -> [4, 1, 11, 512, 512]
+        planes_grid = F.grid_sample(planes.squeeze(1), self.raw_uvcoords.unsqueeze(1).repeat(4, 1, 1, 1), align_corners=False)
+        planes_grid = planes_grid.permute(0,2,3,1) # [4, 1, 35709, 11]
+    
+        # for bs in range(len(planes)): 
+        # for _c, _plane in zip(cam2world_matrix, planes):
+        for _c, _plane in zip(cam2world_matrix, planes_grid):
+            self.viewpoint_camera.update_transforms2(intrinsics, _c)
+            sampled_planes = _plane.squeeze(0) # [35709, 11]
+            
             current_gaussian = self.get_a_gaussian()
-            self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
+            # feature_dict = dnnlib.EasyDict()
+            # st()
+            if self.decode_first == 'all':
+                
+                # feature_dict.features_dc = sampled_planes[..., :3]
+                # feature_dict.opacity = sampled_planes[..., 3:4]
+                # feature_dict.scaling = sampled_planes[..., 4:7]
+                # feature_dict.rotation = sampled_planes[..., 7:]
+                # current_gaussian.update_all_textures(**feature_dict)
+                
+                # current_gaussian.update_all_textures(sampled_planes[..., :3], sampled_planes[..., 3:4], sampled_planes[..., 4:7], sampled_planes[..., 7:])
 
-            if ('UV' in self.feature_structure):
-                textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 48, 1, N_pts)
-        
-            else: 
-                # do not have existing UV map for regressed 3DMM models. Directly sample feature from triplane, to ensure continuity
-                triplane_textures = sample_from_planes(self.plane_axes_gs, textures_gen[None], current_gaussian._xyz[None], padding_mode='zeros', box_warp=self.rendering_kwargs['box_warp']) # triplane_textures -> [1, 3, 35709, 32]
-                textures = self.text_decoder(triplane_textures) # textures -> (1, C, 1, N_pts), C=3 when use_colors_precomp, C=48 when use SH.
+                current_gaussian.update_all_textures2(sampled_planes)
+               
+                
+            # elif self.decode_first == 'wo_color':
+            #     self.gaussians.set_texture(planes[bs])
+            #     self.gaussians.set_features_dc(planes_color[bs], self.torgb_color)
+            #     self.gaussians.set_opacity(planes[bs][..., 0:1] )
+            #     self.gaussians.set_scaling(planes[bs][..., 1:4])
+            #     self.gaussians.set_rotation(planes[bs][..., 4:])
+            # else:
+            #     self.gaussians.set_texture(planes[bs])
+            #     self.gaussians.set_features_dc(planes[bs], self.torgb_color)
+            #     self.gaussians.set_opacity(planes[bs], self.torgb_opacity)
+            #     self.gaussians.set_scaling(planes[bs], self.torgb_scaling)
+            #     self.gaussians.set_rotation(planes[bs], self.torgb_rotation)
             
-            if self.use_colors_precomp:
-                override_color = textures[0,:3,0].permute(1,0) # override_color -> [Npts, 3], range in [0,1]
-                current_gaussian.update_rgb_textures(override_color)
-            else:
-                override_color = None
-                if self.text_decoder_class == 'TextureDecoder_allAttributes':
-                    
-                    start_dim = 0
-                    if self.text_decoder.options['gen_rgb']:
-                    
-                        _rgb = textures[0,start_dim:start_dim+3,0].permute(1,0)
-                        start_dim += 3
-                        current_gaussian.update_rgb_textures(_rgb)
-                    
-                    # if self.text_decoder.options['gen_opacity']:
-                    #     out['opacity'] = torch.sigmoid(x[..., start_dim:start_dim+1]) # should be no adjustment for sigmoid
-                    #     start_dim += 1
-                    
-                    # if self.text_decoder.options['gen_scaling']:
-                    #     out['scaling'] = torch.clamp(torch.exp(x[..., start_dim:start_dim+3].reshape(-1,3)), max=self.options['max_scaling']).reshape(N, H, W, 3)
-                    #     start_dim += 3
-                    #     # torch.clamp(self.scaling_activation(sampled_points.reshape(-1,3)), max=self.max_scaling)
-                        
-                    # if self.text_decoder.options['gen_rotation']:
-                    #     out['rotation'] = torch.nn.functional.normalize(x[..., start_dim:start_dim+4].reshape(-1,4)).reshape(N, H, W, 4) # check consistency before/after normalize: passed. Use: x[2,2,3,7:11]/out['rotation'][2,:,2,3]
-                    #     start_dim += 4
-                    
-                    # if self.text_decoder.options['gen_xyz_offset']:
-                    #     out['xyz_offset'] = torch.nn.functional.normalize(x[..., start_dim:start_dim+3]) # TODO: whether use this normalize? May constrain the offset not deviate too much
-                    #     start_dim += 3
-                    
-                else:
-                    current_gaussian.update_textures(textures)
-            
-            res = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
+            res = gs_render(self.viewpoint_camera, current_gaussian, self.pipeline, self.background, override_color=override_color)
             _rgb_image = res["render"]
             _alpha_image = res["alpha"]
             ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
             
             rgb_image_batch.append(_rgb_image[None])
             alpha_image_batch.append(_alpha_image[None])
-            _real_image = gs_render(self.viewpoint_camera, self.gaussian_debug, None, self.background, override_color=self.verts_rgb if self.use_colors_precomp else None)["render"]
+           
+            _real_image = gs_render(self.viewpoint_camera, self.gaussian_debug, self.pipeline, self.background, override_color=self.verts_rgb if self.use_colors_precomp else None)["render"]
             real_image_batch.append(_real_image[None])
+        
         
         rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
         alpha_image = torch.cat(alpha_image_batch)
         real_image = torch.cat(real_image_batch)
         ## FIXME: try different normalization method to normalize rgb image to [-1,1]
-        rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
+        # rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
+        rgb_image = (rgb_image - 0.5) * 2
+        # print(f"rgb_image of mhg:{rgb_image.shape}")
 
         
         ## TODO: the below superresolution shall be kept?
         ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?
         if self.gaussian_splatting_use_sr:
+            textures_gen_batch = planes
             sr_image = self.superresolution(rgb_image, textures_gen_batch, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
         else:
             sr_image = rgb_image
