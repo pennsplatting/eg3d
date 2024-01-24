@@ -542,10 +542,11 @@ class TriPlaneGenerator(torch.nn.Module):
         real_image_batch = []
         
         
-        planes = planes.permute(0,1,4,2,3) # planes: [4, 1, 512, 512, 11] -> [4, 1, 11, 512, 512]
-        planes_grid = F.grid_sample(planes.squeeze(1), self.raw_uvcoords.unsqueeze(1).repeat(4, 1, 1, 1), align_corners=False)
+        # planes: [4, 1, 256, 256, 11]
+        planes_grid = F.grid_sample(planes.permute(0,1,4,2,3).squeeze(1), self.raw_uvcoords.unsqueeze(1).repeat(4, 1, 1, 1), align_corners=False)
         planes_grid = planes_grid.permute(0,2,3,1) # [4, 1, 35709, 11]
-    
+
+
         # for bs in range(len(planes)): 
         # for _c, _plane in zip(cam2world_matrix, planes):
         for _c, _plane in zip(cam2world_matrix, planes_grid):
@@ -615,8 +616,25 @@ class TriPlaneGenerator(torch.nn.Module):
         # depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
         ### ----- gaussian splatting [END] -----
 
-        # return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image}
-        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image}
+
+        # return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image}
+
+        if self.decode_first == 'all':
+            try : 
+                  return {'image': sr_image, 'scaling': planes[..., 4: 7],
+                    'opacity': self.gaussian_debug.opacity_activation(planes[..., 3: 4]), 'image_mask': alpha_image, 'image_real': real_image
+                    }
+            except:
+                return {'image': sr_image, 'scaling': planes[..., 4: 7],
+                        'opacity': self.gaussian_debug.opacity_activation(planes[..., 3: 4]), 'image_mask': alpha_image, 'image_real': real_image
+                        }
+        elif self.decode_first == 'wo_color':
+            return {'image': sr_image, 'scaling': planes[..., 1: 4],
+                    'opacity': self.gaussian_debug.opacity_activation(planes[..., 0: 1]), 'image_mask': alpha_image, 'image_real': real_image}
+        else:
+            # return {'image': rendering, 'scaling': torch.stack(scales), "mask": mask}
+            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image}
+
     
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):

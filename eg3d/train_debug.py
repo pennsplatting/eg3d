@@ -196,6 +196,14 @@ def parse_comma_separated_list(s):
 @click.option('--reg_type', help='Type of regularization', metavar='STR',  type=click.Choice(['l1', 'l1-alt', 'monotonic-detach', 'monotonic-fixed', 'total-variation']), required=False, default='l1')
 @click.option('--decoder_lr_mul',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
 
+# for MHG
+@click.option('--decode_first', help='Whether decode the color attributes first and then do interpolation', metavar='STR',  type=click.Choice(['all', 'none', 'wo_color']), required=False, default='all')
+@click.option('--reg_weight',    help='regularization weight.', metavar='FLOAT', type=click.FloatRange(min=0), default=0.1, required=False, show_default=True)
+@click.option('--opacity_reg',    help='regularization weight for opacity.', metavar='FLOAT', type=click.FloatRange(min=0), default=1.0, required=False, show_default=True)
+@click.option('--l1_loss_reg', help='Use l1 regularizer for the scaling ; if false, l2 will be used', metavar='BOOL', type=bool, required=False, default=True)
+@click.option('--clamp_scale_loss', help='Whether use clamping in scaling regularization', metavar='BOOL', type=bool, required=False, default=True)
+@click.option('--use_mask', help='Whether to use mask in discriminators', metavar='BOOL',  type=bool, required=False, default=False)
+
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
     "Alias-Free Generative Adversarial Networks".
@@ -226,7 +234,8 @@ def main(**kwargs):
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
     c.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
-    c.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss')
+    # c.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss')
+    c.loss_kwargs = dnnlib.EasyDict(class_name='training.loss_multihead_g.StyleGAN2Loss')
     c.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, prefetch_factor=2)
 
     # Training set.
@@ -273,11 +282,19 @@ def main(**kwargs):
     # c.G_kwargs.class_name = 'training.triplane_next3d_multiple_gaussian.TriPlaneGenerator'
     c.G_kwargs.class_name = 'training.triplane_next3d_multihead_g.TriPlaneGenerator'
     print('c.G_kwargs.class_name:', c.G_kwargs.class_name)
-    c.D_kwargs.class_name = 'training.dual_discriminator.DualDiscriminator'
+    
+    # c.D_kwargs.class_name = 'training.dual_discriminator.DualDiscriminator'
+    c.D_kwargs.class_name = 'training.dual_discriminator_multihead_g.DualDiscriminator'
     # c.D_kwargs.class_name = 'training.dual_discriminator_condition.DualDiscriminator'
+    print('c.D_kwargs.class_name:', c.D_kwargs.class_name)
+    
     c.G_kwargs.fused_modconv_default = 'inference_only' # Speed up training by using regular convolutions instead of grouped convolutions.
     c.loss_kwargs.filter_mode = 'antialiased' # Filter mode for raw images ['antialiased', 'none', float [0-1]]
     c.D_kwargs.disc_c_noise = opts.disc_c_noise # Regularization for discriminator pose conditioning
+    
+    # MHG
+    c.D_kwargs.use_mask = c.loss_kwargs.use_mask = opts.use_mask
+    c.loss_kwargs.clamp = opts.clamp_scale_loss
 
     if c.training_set_kwargs.resolution == 512:
         sr_module = 'training.superresolution.SuperresolutionHybrid8XDC'
