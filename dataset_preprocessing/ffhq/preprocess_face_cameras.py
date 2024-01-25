@@ -82,6 +82,7 @@ if __name__ == '__main__':
     parser.add_argument("--dest", type=str, default=None)
     parser.add_argument("--max_images", type=int, default=None)
     parser.add_argument("--mode", type=str, default="orig", choices=["orig", "cor"])
+    parser.add_argument("--save_mirror", type=bool, default=False)
     args = parser.parse_args()
 
     camera_dataset_file = os.path.join(args.source, 'cameras.json')
@@ -90,6 +91,8 @@ if __name__ == '__main__':
         cameras = json.load(f)
         
     dataset = {'labels':[]}
+    sub_path = args.dest.split("/")[-2] if args.dest.endswith("/") else args.dest.split("/")[-1]
+
 
     max_images = args.max_images if args.max_images is not None else len(cameras)
     for i, filename in tqdm(enumerate(cameras), total=max_images):
@@ -112,18 +115,22 @@ if __name__ == '__main__':
         image_path = os.path.join(args.source, filename)
         img = Image.open(image_path)
 
-        dataset["labels"].append([filename, label])
+        # dataset["labels"].append([filename, label])
+        dataset["labels"].append([os.path.join(sub_path, filename), label])
         os.makedirs(os.path.dirname(os.path.join(args.dest, filename)), exist_ok=True)
         img.save(os.path.join(args.dest, filename))
 
 
-        flipped_img = ImageOps.mirror(img)
-        flipped_pose = flip_yaw(pose)
-        label = np.concatenate([flipped_pose.reshape(-1), intrinsics.reshape(-1)]).tolist()
-        base, ext = filename.split('.')[0], '.' + filename.split('.')[1]
-        flipped_filename = base + '_mirror' + ext
-        dataset["labels"].append([flipped_filename, label])
-        flipped_img.save(os.path.join(args.dest, flipped_filename))
+        if args.save_mirror:
+            print("We should not use mirror image")
+            exit()
+            flipped_img = ImageOps.mirror(img)
+            flipped_pose = flip_yaw(pose)
+            label = np.concatenate([flipped_pose.reshape(-1), intrinsics.reshape(-1)]).tolist()
+            base, ext = filename.split('.')[0], '.' + filename.split('.')[1]
+            flipped_filename = base + '_mirror' + ext
+            dataset["labels"].append([flipped_filename, label])
+            flipped_img.save(os.path.join(args.dest, flipped_filename))
         
     with open(os.path.join(args.dest, 'dataset.json'), "w") as f:
         json.dump(dataset, f)
