@@ -195,6 +195,8 @@ def parse_comma_separated_list(s):
 @click.option('--density_reg_p_dist',    help='density regularization strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=0.004, required=False, show_default=True)
 @click.option('--reg_type', help='Type of regularization', metavar='STR',  type=click.Choice(['l1', 'l1-alt', 'monotonic-detach', 'monotonic-fixed', 'total-variation']), required=False, default='l1')
 @click.option('--decoder_lr_mul',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
+# mask condition
+@click.option('--use_mask_condition', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
 
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
@@ -227,6 +229,8 @@ def main(**kwargs):
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
     c.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
     c.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss')
+    
+        
     c.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, prefetch_factor=2)
 
     # Training set.
@@ -267,15 +271,26 @@ def main(**kwargs):
 
     # Base configuration.
     c.ema_kimg = c.batch_size * 10 / 32
+    ## G
     # c.G_kwargs.class_name = 'training.triplane.TriPlaneGenerator'
     # c.G_kwargs.class_name = 'training.triplane_3dmm.TriPlaneGenerator'
     # c.G_kwargs.class_name = 'training.triplane_next3d.TriPlaneGenerator'
     # c.G_kwargs.class_name = 'training.triplane_next3d_multiple_gaussian.TriPlaneGenerator'
     c.G_kwargs.class_name = 'training.triplane_next3d_offset_gaussian.TriPlaneGenerator'
     print('c.G_kwargs.class_name:', c.G_kwargs.class_name)
-    c.D_kwargs.class_name = 'training.dual_discriminator.DualDiscriminator'
-    # c.D_kwargs.class_name = 'training.dual_discriminator_condition.DualDiscriminator'
+    ## D
+    if not opts.use_mask_condition:
+        c.D_kwargs.class_name = 'training.dual_discriminator.DualDiscriminator'
+    else:
+        c.D_kwargs.class_name = 'training.dual_discriminator_mask_condition.DualDiscriminator'
     c.G_kwargs.fused_modconv_default = 'inference_only' # Speed up training by using regular convolutions instead of grouped convolutions.
+    ## Loss
+    if opts.use_mask_condition:
+        c.loss_kwargs.class_name='training.loss_mask_condition.StyleGAN2Loss'
+        c.loss_kwargs.reg_weight = 0
+        c.loss_kwargs.opacity_reg = 0
+        c.loss_kwargs.use_mask = opts.use_mask_condition
+        
     c.loss_kwargs.filter_mode = 'antialiased' # Filter mode for raw images ['antialiased', 'none', float [0-1]]
     c.D_kwargs.disc_c_noise = opts.disc_c_noise # Regularization for discriminator pose conditioning
 

@@ -149,6 +149,8 @@ class TriPlaneGenerator(torch.nn.Module):
         # print(f"GS bg is white:{white_background}: black:{not white_background}")
         bg_color = [1,1,1] if self.white_background else [0, 0, 0]
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+        self.alpha_option = 'alpha'
+        assert self.alpha_option in ['alpha', 'silhouette']
 
         # load reduced index for front face only model
         self.keep_only_front_face_UV()
@@ -258,7 +260,8 @@ class TriPlaneGenerator(torch.nn.Module):
             "texture_decoder scale_factor": getattr(self.text_decoder, 'scale_factor', None),
             "texture_decoder output attriutes": getattr(self.text_decoder, 'options', None),
             "decode_before_gridsample": self.decode_before_gridsample,
-
+            # Rendering 
+            "alpha or silhouettes": self.alpha_option,
 
         }
         
@@ -565,7 +568,7 @@ class TriPlaneGenerator(torch.nn.Module):
             alpha_image = torch.cat(alpha_image_batch)
             real_image = torch.cat(real_image_batch)
             ## FIXME: try different normalization method to normalize rgb image to [-1,1]
-            rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
+            # rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
     
             
             ## TODO: the below superresolution shall be kept?
@@ -581,7 +584,7 @@ class TriPlaneGenerator(torch.nn.Module):
             ### ----- gaussian splatting [END] -----
 
         # return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image}
-        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image}
+        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image} # all in range  [0,1]
     
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
