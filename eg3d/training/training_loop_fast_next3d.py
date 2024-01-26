@@ -569,7 +569,7 @@ def training_loop(
                 if 'G' in phase.name:
                     for _gi in range(1, phase.module.num_gaussians+1):
                         _gs = getattr(phase.module, f"g{_gi}")
-                        if _gs._xyz.grad is not None:
+                        if _gs._scaling.grad is not None:
                             phases_updated_gaussians.add(_gi)
                             # st() # bu t here features_dc/rest having requires_grad=True???
                             _gs.optimizer.step()
@@ -581,7 +581,7 @@ def training_loop(
                 elif 'D' in phase.name:
                     for _gi in range(1, G.num_gaussians+1):
                         _gs = getattr(G, f"g{_gi}")
-                        if _gs._xyz.grad is not None:
+                        if _gs._scaling.grad is not None:
                             print(f'there should be no grad for gaussians {_gi} in D phase')
                             st()
                 else:

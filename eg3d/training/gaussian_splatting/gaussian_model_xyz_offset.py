@@ -60,7 +60,7 @@ def print_grad(name, grad):
     # print(grad)
     print('\t',grad.max(), grad.min(), grad.mean())
     
-class GaussianModel:
+class GaussianModel_OffsetXYZ:
 
     def setup_functions(self):
         
@@ -81,7 +81,8 @@ class GaussianModel:
         self.update_iterations = 0 # to record how many times this gaussian has been updated. for the use of oneupSHdegree()
         self.update_interval = 10000
         self.max_sh_degree = sh_degree 
-        self._xyz = torch.empty(0)
+        # self._xyz = torch.empty(0)
+        self._xyz_base = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
         self._scaling = torch.empty(0)
@@ -118,7 +119,7 @@ class GaussianModel:
     
     def get_copy(self):
         # Create a new instance of GaussianModel
-        copied_instance = GaussianModel(sh_degree=self.max_sh_degree, verts=self._xyz, index=self.index, active_sh_degree=self.active_sh_degree)
+        copied_instance = GaussianModel_OffsetXYZ(sh_degree=self.max_sh_degree, verts=self._xyz, index=self.index, active_sh_degree=self.active_sh_degree)
 
         # Copy the necessary attributes
         copied_instance._xyz = self._xyz.clone().detach()  # Detach if needed
@@ -142,7 +143,7 @@ class GaussianModel:
         """
         # Define your logic to return parameters here
         # For example, if your parameters are stored in a list, you can return that list
-        return [self._xyz, self._scaling, self._rotation, self._opacity]
+        return [self._scaling, self._rotation, self._opacity]
         ## FIXME: self._features_dc, self._features_rest: non-leaf tensors, cannot requries grad=False
 
     
@@ -241,10 +242,9 @@ class GaussianModel:
     # this function is corresponding to the "create_from_pcd" in the original gs implementation, but removed the parameterization for color 
     def init_point_cloud(self, verts):
         # TODO: freeze some parameters, like self._xyz?
-        self._xyz = nn.Parameter(verts)
+        self._xyz_base = verts
+        self._xyz = verts
         self.spatial_lr_scale = 0 # FIXME: hardcoded from original GS implementation, explained by authors in issue
-        # print(f"self.spatial_lr_scale:{self.spatial_lr_scale}")
-        
 
         dist2 = torch.clamp_min(distCUDA2(self._xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
@@ -339,9 +339,8 @@ class GaussianModel:
         self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True) # [V, 1, 3]
         self._features_rest = features[:,:,1:].transpose(1, 2).contiguous()#.requires_grad_(True)# [V, sh degree - 1, 3]
     
-    def update_xyz_offset_textures(self, xyz_offset):
-        print(f"xyz_offset:{xyz_offset}")
-        self._xyz = self._xyz + xyz_offset
+    def update_xyz_offset(self, xyz_offset):
+        self._xyz = self._xyz_base + xyz_offset
         
     ## for assigning rgb texture to G.debug_gaussian. Not for other gaussians
     def update_rgb_textures(self, feature_uv):
