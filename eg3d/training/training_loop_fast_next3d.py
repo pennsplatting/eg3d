@@ -441,7 +441,9 @@ def training_loop(
     batch_idx = 0
     if progress_fn is not None:
         progress_fn(0, total_kimg)
-        
+    
+    
+    optimze_gaussians = False
     
     while True:
 
@@ -473,23 +475,25 @@ def training_loop(
              
             phase.opt.zero_grad(set_to_none=True)
             phase.module.requires_grad_(True)
-            ## Also set grad for gaussians
-            # print("A")   
-            if 'G' in phase.name:
-                for _gi in range(1, phase.module.num_gaussians+1):
-                    _gs = getattr(phase.module, f"g{_gi}")
-                    _gs.optimizer.zero_grad(set_to_none = True)
-                    _gs.requires_grad(True)
-                    # if _gs._xyz.requires_grad:
-                    #     print(f"_gs{_gi} _xyz.requires_grad")    
-                    # print(f"set gs{_gi} to requires grad True ///") # except: self._features_dc, self._features_rest
-                    
-            # print("B")
-            # for _gi in range(1, G.num_gaussians+1):
-            #         _gs = getattr(G, f"g{_gi}")
-            #         if _gs._features_dc.requires_grad:
-            #             print(f"_gs{_gi} _features_dc.requires_grad")
-                    
+            
+            if optimze_gaussians:
+                ## Also set grad for gaussians
+                # print("A")   
+                if 'G' in phase.name:
+                    for _gi in range(1, phase.module.num_gaussians+1):
+                        _gs = getattr(phase.module, f"g{_gi}")
+                        _gs.optimizer.zero_grad(set_to_none = True)
+                        _gs.requires_grad(True)
+                        # if _gs._xyz.requires_grad:
+                        #     print(f"_gs{_gi} _xyz.requires_grad")    
+                        # print(f"set gs{_gi} to requires grad True ///") # except: self._features_dc, self._features_rest
+                        
+                # print("B")
+                # for _gi in range(1, G.num_gaussians+1):
+                #         _gs = getattr(G, f"g{_gi}")
+                #         if _gs._features_dc.requires_grad:
+                #             print(f"_gs{_gi} _features_dc.requires_grad")
+                        
            
             
             for real_img, real_c, gen_z, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c):
@@ -524,18 +528,20 @@ def training_loop(
 
                 
             phase.module.requires_grad_(False)
-            ## Also set grad for gaussians
-            if 'G' in phase.name:
-                for _gi in range(1, phase.module.num_gaussians+1):
-                    _gs = getattr(phase.module, f"g{_gi}")
-                    _gs.requires_grad(False)
-                    # print(f"set gs{_gi} to requires grad False xxx")
             
-            # print("D")
-            # for _gi in range(1, G.num_gaussians+1):
-            #         _gs = getattr(G, f"g{_gi}")
-            #         if _gs._features_dc.requires_grad:
-            #             print(f"_gs{_gi} _features_dc.requires_grad")
+            if optimze_gaussians:
+                ## Also set grad for gaussians
+                if 'G' in phase.name:
+                    for _gi in range(1, phase.module.num_gaussians+1):
+                        _gs = getattr(phase.module, f"g{_gi}")
+                        _gs.requires_grad(False)
+                        # print(f"set gs{_gi} to requires grad False xxx")
+                
+                # print("D")
+                # for _gi in range(1, G.num_gaussians+1):
+                #         _gs = getattr(G, f"g{_gi}")
+                #         if _gs._features_dc.requires_grad:
+                #             print(f"_gs{_gi} _features_dc.requires_grad")
             
 
             # Update weights.
@@ -566,26 +572,29 @@ def training_loop(
                 # optimizer step for gaussian
                 # if iteration < opt.iterations: 
                 
-                if 'G' in phase.name:
-                    for _gi in range(1, phase.module.num_gaussians+1):
-                        _gs = getattr(phase.module, f"g{_gi}")
-                        if _gs._scaling.grad is not None:
-                            phases_updated_gaussians.add(_gi)
-                            # st() # bu t here features_dc/rest having requires_grad=True???
-                            _gs.optimizer.step()
-                            _gs.optimizer.zero_grad(set_to_none = True)
-                            # print(f"gs{_gi}._xyz has changed: {torch.any(G.gaussian_debug._xyz != _gs._xyz )}")
-                            # print(f'---the gs {_gi} xyz has changed: {torch.any(getattr(G_ema, f"g{_gi}")._xyz != _gs._xyz )}')
+                
+                if optimze_gaussians:
+                    if 'G' in phase.name:
+                        for _gi in range(1, phase.module.num_gaussians+1):
+                            _gs = getattr(phase.module, f"g{_gi}")
+                            if _gs._scaling.grad is not None:
+                                st()
+                                phases_updated_gaussians.add(_gi)
+                                # st() # bu t here features_dc/rest having requires_grad=True???
+                                _gs.optimizer.step()
+                                _gs.optimizer.zero_grad(set_to_none = True)
+                                # print(f"gs{_gi}._xyz has changed: {torch.any(G.gaussian_debug._xyz != _gs._xyz )}")
+                                # print(f'---the gs {_gi} xyz has changed: {torch.any(getattr(G_ema, f"g{_gi}")._xyz != _gs._xyz )}')
             
                             
-                elif 'D' in phase.name:
-                    for _gi in range(1, G.num_gaussians+1):
-                        _gs = getattr(G, f"g{_gi}")
-                        if _gs._scaling.grad is not None:
-                            print(f'there should be no grad for gaussians {_gi} in D phase')
-                            st()
-                else:
-                    print(f"what is this phase? -> {phase.name}")
+                    elif 'D' in phase.name:
+                        for _gi in range(1, G.num_gaussians+1):
+                            _gs = getattr(G, f"g{_gi}")
+                            if _gs._scaling.grad is not None:
+                                print(f'there should be no grad for gaussians {_gi} in D phase')
+                                st()
+                    else:
+                        print(f"what is this phase? -> {phase.name}")
                             
             
             # past_phases.append({phase.name:_updated_gaussians})

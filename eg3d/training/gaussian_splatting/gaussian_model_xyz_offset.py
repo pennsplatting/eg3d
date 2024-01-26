@@ -98,6 +98,8 @@ class GaussianModel_OffsetXYZ:
         self.init_point_cloud(verts)
         self.index = index
         self.training_setup(gs_training_args)
+        self.max_s = None
+        self.min_s = None
         # print(f"init gs_{self.index} has activeSH={self.active_sh_degree}; maxSH={self.max_sh_degree}")
     
 
@@ -181,6 +183,10 @@ class GaussianModel_OffsetXYZ:
 
     @property
     def get_scaling(self):
+        if (self.max_s is not None) or (self.min_s is not None):
+        # if (getattr(self, 'max_s', None) is not None) or (self.min_s is not None):
+            return torch.clamp(self.scaling_activation(self._scaling), max=self.max_s, min=self.min_s)
+        
         return self.scaling_activation(self._scaling)
     
     @property
@@ -196,10 +202,6 @@ class GaussianModel_OffsetXYZ:
         features_dc = self._features_dc
         features_rest = self._features_rest
         
-        # features_dc.requires_grad_(True)
-        # features_dc.register_hook(lambda grad: print_grad("---features_dc.requires_grad", grad))
-        # features_rest.requires_grad_(True) ## exactly the same as the grad of inside gs_render(): shs.grad
-        # features_rest.register_hook(lambda grad: print_grad("---features_rest.requires_grad", grad))
         return torch.cat((features_dc, features_rest), dim=1)
     
     @property
@@ -341,6 +343,21 @@ class GaussianModel_OffsetXYZ:
     
     def update_xyz_offset(self, xyz_offset):
         self._xyz = self._xyz_base + xyz_offset
+
+    def update_opacity(self, opacity):
+        self._opacity = opacity
+
+    def update_scaling(self, scaling, max_s=None, min_s=None):  
+        # clamp settings
+        self.max_s = max_s
+        self.min_s = min_s
+        
+        # update
+        self._scaling = scaling
+    
+    def update_rotation(self, rotation):
+        self._rotation = rotation
+
         
     ## for assigning rgb texture to G.debug_gaussian. Not for other gaussians
     def update_rgb_textures(self, feature_uv):

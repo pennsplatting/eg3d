@@ -193,16 +193,23 @@ class TriPlaneGenerator(torch.nn.Module):
         self.decode_before_gridsample = True
         
         self.text_decoder_class = 'TextureDecoder_allAttributes'
-        assert self.text_decoder_class in ['TextureDecoder', 'TextureDecoder_noSigmoid', 'TextureDecoder_allAttributes', 'TextureDecoder_offset_xyz']
+        assert self.text_decoder_class in ['TextureDecoder', 'TextureDecoder_noSigmoid', 'TextureDecoder_allAttributes']
         
         # texture decoder: the output dim is aware of whether use rgb or sh to render gaussian, controled by use_colors_precomp
         if ('UV' in self.feature_structure):
             # decode -> UV sample
             
             if self.text_decoder_class == 'TextureDecoder_allAttributes':
-                self.text_decoder = TextureDecoder_allAttributes(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
-                                                                  'gen_rgb':False, 'gen_sh':True, 'gen_opacity':False, 'gen_scaling':False, 'gen_rotation':False, 'gen_xyz_offset':True,
+                no_activation_in_decoder=True
+                if no_activation_in_decoder:
+                    self.text_decoder = TextureDecoder_allAttributes_noActivations(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
+                                                                    'gen_rgb':False, 'gen_sh':True, 'gen_opacity':True, 'gen_scaling':True, 'gen_rotation':True, 'gen_xyz_offset':True,
+                                                                  'max_scaling':None, 'min_scaling':None})
+                else:
+                    self.text_decoder = TextureDecoder_allAttributes(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
+                                                                    'gen_rgb':False, 'gen_sh':True, 'gen_opacity':True, 'gen_scaling':False, 'gen_rotation':False, 'gen_xyz_offset':True,
                                                                   'max_scaling':1})
+                
             elif self.text_decoder_class == 'TextureDecoder_noSigmoid':   
                 self.text_decoder = TextureDecoder_noSigmoid(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
             elif self.text_decoder_class == 'TextureDecoder':
@@ -247,6 +254,8 @@ class TriPlaneGenerator(torch.nn.Module):
             "texture_decoder": self.text_decoder.__class__.__name__,
             "texture_decoder output scale": getattr(self.text_decoder, 'output_scale', None),
             "texture_decoder xyz_offset_scale": getattr(self.text_decoder, 'xyz_offset_scale', None),
+            "texture_decoder scale_bias": getattr(self.text_decoder, 'scale_bias', None),
+            "texture_decoder scale_factor": getattr(self.text_decoder, 'scale_factor', None),
             "texture_decoder output attriutes": getattr(self.text_decoder, 'options', None),
             "decode_before_gridsample": self.decode_before_gridsample,
 
@@ -518,21 +527,25 @@ class TriPlaneGenerator(torch.nn.Module):
                         if self.text_decoder.options['gen_opacity']:
                             _opacity = textures[0,start_dim:start_dim+1,0].permute(1,0) # should be no adjustment for sigmoid
                             start_dim += 1
-                            current_gaussian.update_opacity(_sh)
+                            current_gaussian.update_opacity(_opacity)
                         
-                        # if self.text_decoder.options['gen_scaling']:
-                        #     out['scaling'] = torch.clamp(torch.exp(x[..., start_dim:start_dim+3].reshape(-1,3)), max=self.options['max_scaling']).reshape(N, H, W, 3)
-                        #     start_dim += 3
-                        #     # torch.clamp(self.scaling_activation(sampled_points.reshape(-1,3)), max=self.max_scaling)
+                        if self.text_decoder.options['gen_scaling']:
+                            _scaling = textures[0,start_dim:start_dim+3,0].permute(1,0)
+                            current_gaussian.update_scaling(_scaling, max_s = self.text_decoder.options['max_scaling'], min_s = self.text_decoder.options['min_scaling'])
+                            start_dim += 3
                             
-                        # if self.text_decoder.options['gen_rotation']:
-                        #     out['rotation'] = torch.nn.functional.normalize(x[..., start_dim:start_dim+4].reshape(-1,4)).reshape(N, H, W, 4) # check consistency before/after normalize: passed. Use: x[2,2,3,7:11]/out['rotation'][2,:,2,3]
-                        #     start_dim += 4
+                        if self.text_decoder.options['gen_rotation']:
+                            _rotation = textures[0,start_dim:start_dim+4,0].permute(1,0)
+                            current_gaussian.update_rotation(_rotation)
+                            start_dim += 4
                         
                         if self.text_decoder.options['gen_xyz_offset']:
                             _xyz_offset = textures[0,start_dim:start_dim+3,0].permute(1,0)
                             current_gaussian.update_xyz_offset(_xyz_offset)
                             start_dim += 3
+                            
+                    
+                        assert start_dim==textures.shape[1]
                         
                     else:
                         current_gaussian.update_textures(textures)
@@ -626,6 +639,76 @@ class OSGDecoder(torch.nn.Module):
 
 
 # decode features to SH
+class TextureDecoder_allAttributes_noActivations(torch.nn.Module):
+    def __init__(self, n_features, options):
+        super().__init__()
+        self.hidden_dim = 64
+        
+        self.options = options
+        self.out_dim = 3 * options['gen_rgb'] + 3 * options['gen_sh'] + 1 * options['gen_opacity'] + 3 * options['gen_scaling'] + 4 * options['gen_rotation'] + 3 * options['gen_xyz_offset']
+        self.xyz_offset_scale = 6.e-06
+        
+        self.net = torch.nn.Sequential(
+            FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
+            torch.nn.Softplus(),
+            FullyConnectedLayer(self.hidden_dim, self.out_dim, lr_multiplier=options['decoder_lr_mul'])
+        )
+        self.scale_bias = -5
+        self.scale_factor = 0.01
+            
+    def forward(self, sampled_features):
+      
+        # features (4, 96, 256, 256) -> (4, 16*3, 256, 256)
+        # Aggregate features
+    
+        sampled_features = sampled_features.permute(0,2,3,1)
+        x = sampled_features
+        N, H, W, C = x.shape 
+        x = x.reshape(N*H*W, C)
+        
+        x = self.net(x)
+        # FIXME: do x = x.view(N, M, -1), decode after GS get features
+        x = x.reshape(N, H, W, -1)
+    
+        start_dim = 0
+        out = {}
+        assert not (self.options['gen_rgb'] and self.options['gen_sh'])
+        if self.options['gen_rgb']:
+            out['rgb'] = torch.sigmoid(x[..., start_dim:start_dim+3])*(1 + 2*0.001) - 0.001
+            start_dim += 3
+        
+        if self.options['gen_sh']:
+            out['sh'] = x[..., start_dim:start_dim+3]
+            start_dim += 3
+        
+        if self.options['gen_opacity']:
+            out['opacity'] = x[..., start_dim:start_dim+1] # should be no adjustment for sigmoid
+            start_dim += 1
+        
+        if self.options['gen_scaling']:
+            out['scaling'] = self.scale_bias + self.scale_factor * x[..., start_dim:start_dim+3].reshape(-1,3).reshape(N, H, W, 3)
+            start_dim += 3
+            
+        if self.options['gen_rotation']:
+            out['rotation'] = x[..., start_dim:start_dim+4].reshape(-1,4).reshape(N, H, W, 4) # check consistency before/after normalize: passed. Use: x[2,2,3,7:11]/out['rotation'][2,:,2,3]
+            start_dim += 4
+        
+        if self.options['gen_xyz_offset']:
+            out['xyz_offset'] = self.xyz_offset_scale * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]) # TODO: whether use this normalize? May constrain the offset not deviate too much
+            start_dim += 3
+            
+
+        # x.permute(0, 3, 1, 2)
+        for key, v in out.items():
+            # print(f"{key}:{v.shape}")
+            out[key] = v.permute(0, 3, 1, 2)
+            # print(f"{key} reshape to -> :{out[key].shape}")
+
+        out_planes = torch.cat([v for key, v in out.items()] ,dim=1)
+   
+        return out_planes
+
+# decode features to SH
 class TextureDecoder_allAttributes(torch.nn.Module):
     def __init__(self, n_features, options):
         super().__init__()
@@ -673,7 +756,6 @@ class TextureDecoder_allAttributes(torch.nn.Module):
         if self.options['gen_scaling']:
             out['scaling'] = torch.clamp(torch.exp(x[..., start_dim:start_dim+3].reshape(-1,3)), max=self.options['max_scaling']).reshape(N, H, W, 3)
             start_dim += 3
-            # torch.clamp(self.scaling_activation(sampled_points.reshape(-1,3)), max=self.max_scaling)
             
         if self.options['gen_rotation']:
             out['rotation'] = torch.nn.functional.normalize(x[..., start_dim:start_dim+4].reshape(-1,4)).reshape(N, H, W, 4) # check consistency before/after normalize: passed. Use: x[2,2,3,7:11]/out['rotation'][2,:,2,3]
@@ -692,8 +774,7 @@ class TextureDecoder_allAttributes(torch.nn.Module):
 
         out_planes = torch.cat([v for key, v in out.items()] ,dim=1)
    
-        return out_planes
-    
+        return out_planes   
     
 # decode features to SH
 class TextureDecoder_noSigmoid(torch.nn.Module):
