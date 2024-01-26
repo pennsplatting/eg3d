@@ -138,7 +138,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 200
+        self.num_gaussians = 1
         print(f"We have init {self.num_gaussians} gaussians.\n")  
 
         # by default
@@ -150,7 +150,10 @@ class TriPlaneGenerator(torch.nn.Module):
         bg_color = [1,1,1] if self.white_background else [0, 0, 0]
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-        self.init_from_the_same_canonical = False
+        # load reduced index for front face only model
+        self.keep_only_front_face_UV()
+
+        self.init_from_the_same_canonical = True
         
         if self.init_from_the_same_canonical:
             self.feature_structure = f'UV_{self.raw_uvcoords.shape[1]}'
@@ -179,9 +182,6 @@ class TriPlaneGenerator(torch.nn.Module):
                 vertices = (vertices - vertices.mean(dim=0)) * scale_factor + target_mean
                 setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(vertices), i))
             self.plane_axes_gs = generate_planes().to(self.verts.device)
-            
-            # load reduced index for front face only model
-            self.keep_only_front_face_UV()
             
         
         # all the following things must be executed after "self->keep_only_front_face_UV()"
@@ -221,7 +221,7 @@ class TriPlaneGenerator(torch.nn.Module):
         index_exp = index_exp['idx'].astype(np.int32) - 1  # starts from 0 (to 53215)
         
         assert hasattr(self, 'raw_uvcoords')
-        assert int(index_exp.shape[0]) == int(self.g1._xyz.shape[0])
+        # assert int(index_exp.shape[0]) == int(self.g1._xyz.shape[0])
                
         self.raw_uvcoords = self.raw_uvcoords[0][index_exp].permute(1,0,2)
         self.verts = self.verts[index_exp].squeeze(1)
