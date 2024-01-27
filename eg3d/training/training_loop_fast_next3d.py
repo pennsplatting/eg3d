@@ -406,7 +406,6 @@ def training_loop(
         print('Exporting sample images...')
         grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
         save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
-        st()
         
         if loss_choice == 'mask_real_face':
             images_masked = get_face_mask(images, type='numpy')
@@ -678,8 +677,10 @@ def training_loop(
             # save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=[-1,1], grid_size=grid_size)
             save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=[0,1], grid_size=grid_size)
             # save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cu r_nimg//1000:06d}_mask.png'), drange=[images_mask.min(), images_mask.max()], grid_size=grid_size)
-            save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[0, 1], grid_size=grid_size)
+            save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[-1, 0], grid_size=grid_size)
             save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[0,1], grid_size=grid_size)
+           
+            # save mask of real images
             
             
             save_override_color = getattr(G_ema, 'use_colors_precomp')

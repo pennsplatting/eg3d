@@ -138,7 +138,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 1
+        self.num_gaussians = 5
         print(f"We have init {self.num_gaussians} gaussians.\n")  
 
         # by default
@@ -155,7 +155,7 @@ class TriPlaneGenerator(torch.nn.Module):
         # load reduced index for front face only model
         self.keep_only_front_face_UV()
 
-        self.init_from_the_same_canonical = True
+        self.init_from_the_same_canonical = False
         
         if self.init_from_the_same_canonical:
             self.feature_structure = f'UV_{self.raw_uvcoords.shape[1]}'
@@ -205,7 +205,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 no_activation_in_decoder=True
                 if no_activation_in_decoder:
                     self.text_decoder = TextureDecoder_allAttributes_noActivations(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
-                                                                    'gen_rgb':False, 'gen_sh':True, 'gen_opacity':True, 'gen_scaling':True, 'gen_rotation':True, 'gen_xyz_offset':True,
+                                                                    'gen_rgb':False, 'gen_sh':True, 'gen_opacity':False, 'gen_scaling':False, 'gen_rotation':False, 'gen_xyz_offset':False,
                                                                   'max_scaling':None, 'min_scaling':None})
                 else:
                     self.text_decoder = TextureDecoder_allAttributes(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
@@ -530,16 +530,19 @@ class TriPlaneGenerator(torch.nn.Module):
                         if self.text_decoder.options['gen_opacity']:
                             _opacity = textures[0,start_dim:start_dim+1,0].permute(1,0) # should be no adjustment for sigmoid
                             start_dim += 1
+                            st()
                             current_gaussian.update_opacity(_opacity)
                         
                         if self.text_decoder.options['gen_scaling']:
                             _scaling = textures[0,start_dim:start_dim+3,0].permute(1,0)
                             current_gaussian.update_scaling(_scaling, max_s = self.text_decoder.options['max_scaling'], min_s = self.text_decoder.options['min_scaling'])
+                            st()
                             start_dim += 3
                             
                         if self.text_decoder.options['gen_rotation']:
                             _rotation = textures[0,start_dim:start_dim+4,0].permute(1,0)
                             current_gaussian.update_rotation(_rotation)
+                            st()
                             start_dim += 4
                         
                         if self.text_decoder.options['gen_xyz_offset']:
@@ -567,8 +570,6 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
             real_image = torch.cat(real_image_batch)
-            ## FIXME: try different normalization method to normalize rgb image to [-1,1]
-            # rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
     
             
             ## TODO: the below superresolution shall be kept?
@@ -584,6 +585,7 @@ class TriPlaneGenerator(torch.nn.Module):
             ### ----- gaussian splatting [END] -----
 
         # return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image}
+        # print(f"alpha range; {alpha_image.min(), alpha_image.max()}")
         return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image} # all in range  [0,1]
     
     
