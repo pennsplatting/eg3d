@@ -185,7 +185,8 @@ class GaussianModel_OffsetXYZ:
     def get_scaling(self):
         if (self.max_s is not None) or (self.min_s is not None):
         # if (getattr(self, 'max_s', None) is not None) or (self.min_s is not None):
-            return torch.clamp(self.scaling_activation(self._scaling), max=self.max_s, min=self.min_s)
+            # return torch.clamp(self.scaling_activation(self._scaling), max=self.max_s, min=self.min_s)
+            return self.scaling_activation(torch.clamp(self._scaling, max=self.max_s, min=self.min_s))
         
         return self.scaling_activation(self._scaling)
     
@@ -249,9 +250,10 @@ class GaussianModel_OffsetXYZ:
         self.spatial_lr_scale = 0 # FIXME: hardcoded from original GS implementation, explained by authors in issue
 
         dist2 = torch.clamp_min(distCUDA2(self._xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
-        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3) # min: -8.0590, max: -4.3734, mode: -7~-6
         rots = torch.zeros((self._xyz.shape[0], 4), device="cuda")
         rots[:, 0] = 1
+
         
         if gs_training_args.opacity_lr==0:
             # print("when no lr for opacity, init opacity to ones")

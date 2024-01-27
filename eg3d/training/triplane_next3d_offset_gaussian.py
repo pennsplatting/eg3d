@@ -138,7 +138,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 5
+        self.num_gaussians = 500
         print(f"We have init {self.num_gaussians} gaussians.\n")  
 
         # by default
@@ -205,8 +205,8 @@ class TriPlaneGenerator(torch.nn.Module):
                 no_activation_in_decoder=True
                 if no_activation_in_decoder:
                     self.text_decoder = TextureDecoder_allAttributes_noActivations(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
-                                                                    'gen_rgb':False, 'gen_sh':True, 'gen_opacity':False, 'gen_scaling':False, 'gen_rotation':False, 'gen_xyz_offset':False,
-                                                                  'max_scaling':None, 'min_scaling':None})
+                                                                    'gen_rgb':False, 'gen_sh':True, 'gen_opacity':True, 'gen_scaling':True, 'gen_rotation':True, 'gen_xyz_offset':False,
+                                                                  'max_scaling':-4, 'min_scaling':-9})
                 else:
                     self.text_decoder = TextureDecoder_allAttributes(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
                                                                     'gen_rgb':False, 'gen_sh':True, 'gen_opacity':True, 'gen_scaling':False, 'gen_rotation':False, 'gen_xyz_offset':True,
@@ -530,19 +530,16 @@ class TriPlaneGenerator(torch.nn.Module):
                         if self.text_decoder.options['gen_opacity']:
                             _opacity = textures[0,start_dim:start_dim+1,0].permute(1,0) # should be no adjustment for sigmoid
                             start_dim += 1
-                            st()
                             current_gaussian.update_opacity(_opacity)
                         
                         if self.text_decoder.options['gen_scaling']:
                             _scaling = textures[0,start_dim:start_dim+3,0].permute(1,0)
                             current_gaussian.update_scaling(_scaling, max_s = self.text_decoder.options['max_scaling'], min_s = self.text_decoder.options['min_scaling'])
-                            st()
                             start_dim += 3
                             
                         if self.text_decoder.options['gen_rotation']:
                             _rotation = textures[0,start_dim:start_dim+4,0].permute(1,0)
                             current_gaussian.update_rotation(_rotation)
-                            st()
                             start_dim += 4
                         
                         if self.text_decoder.options['gen_xyz_offset']:
@@ -659,7 +656,7 @@ class TextureDecoder_allAttributes_noActivations(torch.nn.Module):
             FullyConnectedLayer(self.hidden_dim, self.out_dim, lr_multiplier=options['decoder_lr_mul'])
         )
         self.scale_bias = -5
-        self.scale_factor = 0.01
+        self.scale_factor = 1
             
     def forward(self, sampled_features):
       
