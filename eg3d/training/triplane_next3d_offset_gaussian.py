@@ -138,7 +138,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 500
+        self.num_gaussians = 5
         print(f"We have init {self.num_gaussians} gaussians.\n")  
 
         # by default
@@ -203,10 +203,10 @@ class TriPlaneGenerator(torch.nn.Module):
             # decode -> UV sample
             
             if self.text_decoder_class == 'TextureDecoder_allAttributes':
-                no_activation_in_decoder=False
+                no_activation_in_decoder=True
                 if no_activation_in_decoder:
                     self.text_decoder = TextureDecoder_allAttributes_noActivations(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
-                                                                    'gen_rgb':False, 'gen_sh':True, 'gen_opacity':True, 'gen_scaling':True, 'gen_rotation':True, 'gen_xyz_offset':False,
+                                                                    'gen_rgb':False, 'gen_sh':True, 'gen_opacity':True, 'gen_scaling':True, 'gen_rotation':True, 'gen_xyz_offset':True,
                                                                   'max_scaling':-4, 'min_scaling':-7})
                 else:
                     self.text_decoder = TextureDecoder_allAttributes(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
@@ -557,7 +557,8 @@ class TriPlaneGenerator(torch.nn.Module):
                 res = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
                 
                 _rgb_image = res["render"]
-                _alpha_image = res["alpha"]
+                _alpha_image = 1 - res["alpha"]
+            
                 ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
                 
                 rgb_image_batch.append(_rgb_image[None])
