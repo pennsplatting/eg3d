@@ -346,6 +346,7 @@ def training_loop(
     
     ##### --------------------------
     
+    optimze_gaussians = True
     ## -------------- record some attributes of G -----------------------
     # get original contents
     # with open( 'wt') as f:
@@ -361,6 +362,10 @@ def training_loop(
     # append gaussian's attributes
     existing_data.update(
         {'gaussian optimizer':get_optimizer_parameters(G.g1.optimizer)}
+        )
+    
+    existing_data.update(
+        {'optimze_gaussians in training_loop':optimze_gaussians}
         )
     
     # write back
@@ -447,7 +452,6 @@ def training_loop(
         progress_fn(0, total_kimg)
     
     
-    optimze_gaussians = False
     
     while True:
 
@@ -582,7 +586,7 @@ def training_loop(
                         for _gi in range(1, phase.module.num_gaussians+1):
                             _gs = getattr(phase.module, f"g{_gi}")
                             if _gs._scaling.grad is not None:
-                                st()
+                                # st()
                                 phases_updated_gaussians.add(_gi)
                                 # st() # bu t here features_dc/rest having requires_grad=True???
                                 _gs.optimizer.step()

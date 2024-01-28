@@ -203,14 +203,14 @@ class TriPlaneGenerator(torch.nn.Module):
             # decode -> UV sample
             
             if self.text_decoder_class == 'TextureDecoder_allAttributes':
-                no_activation_in_decoder=True
+                no_activation_in_decoder=False
                 if no_activation_in_decoder:
                     self.text_decoder = TextureDecoder_allAttributes_noActivations(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
                                                                     'gen_rgb':False, 'gen_sh':True, 'gen_opacity':True, 'gen_scaling':True, 'gen_rotation':True, 'gen_xyz_offset':False,
                                                                   'max_scaling':-4, 'min_scaling':-7})
                 else:
                     self.text_decoder = TextureDecoder_allAttributes(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
-                                                                    'gen_rgb':False, 'gen_sh':True, 'gen_opacity':True, 'gen_scaling':False, 'gen_rotation':False, 'gen_xyz_offset':True,
+                                                                    'gen_rgb':False, 'gen_sh':True, 'gen_opacity':False, 'gen_scaling':False, 'gen_rotation':False, 'gen_xyz_offset':True,
                                                                   'max_scaling':1})
                 
             elif self.text_decoder_class == 'TextureDecoder_noSigmoid':   
