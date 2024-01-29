@@ -138,7 +138,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 5
+        self.num_gaussians = 500
         print(f"We have init {self.num_gaussians} gaussians.\n")  
 
         # by default
@@ -152,6 +152,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
         self.alpha_option = 'alpha'
         assert self.alpha_option in ['alpha', 'silhouette']
+        self.normalize_rgb_image = True
 
         # load reduced index for front face only model
         self.keep_only_front_face_UV()
@@ -203,14 +204,14 @@ class TriPlaneGenerator(torch.nn.Module):
             # decode -> UV sample
             
             if self.text_decoder_class == 'TextureDecoder_allAttributes':
-                no_activation_in_decoder=True
+                no_activation_in_decoder=False
                 if no_activation_in_decoder:
                     self.text_decoder = TextureDecoder_allAttributes_noActivations(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
                                                                     'gen_rgb':False, 'gen_sh':True, 'gen_opacity':True, 'gen_scaling':True, 'gen_rotation':True, 'gen_xyz_offset':True,
                                                                   'max_scaling':-4, 'min_scaling':-7})
                 else:
                     self.text_decoder = TextureDecoder_allAttributes(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
-                                                                    'gen_rgb':False, 'gen_sh':True, 'gen_opacity':False, 'gen_scaling':False, 'gen_rotation':False, 'gen_xyz_offset':True,
+                                                                    'gen_rgb':True, 'gen_sh':False, 'gen_opacity':False, 'gen_scaling':False, 'gen_rotation':False, 'gen_xyz_offset':True,
                                                                   'max_scaling':1})
                 
             elif self.text_decoder_class == 'TextureDecoder_noSigmoid':   
@@ -263,6 +264,7 @@ class TriPlaneGenerator(torch.nn.Module):
             "decode_before_gridsample": self.decode_before_gridsample,
             # Rendering 
             "alpha or silhouettes": self.alpha_option,
+            "normalize rendered rgb_image": self.normalize_rgb_image,
 
         }
         
@@ -569,6 +571,11 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
             real_image = torch.cat(real_image_batch)
+            if self.normalize_rgb_image:
+                ## FIXME: try different normalization method to normalize rgb image to [-1,1]
+                # rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
+                rgb_image = (rgb_image - 0.5) * 2
+                # print(f'rgb_image range: {rgb_image.min()}~{rgb_image.max()}')
     
             
             ## TODO: the below superresolution shall be kept?
