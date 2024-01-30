@@ -81,6 +81,7 @@ class TriPlaneGenerator(torch.nn.Module):
         w_dim,                      # Intermediate latent (W) dimensionality.
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
+        num_gaussians,              # Number of gaussian bases in the bank.
         sh_degree           = 3,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         text_decoder_kwargs = {},   # GS TextureDecoder
@@ -139,7 +140,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         
         # create a bank of gaussian models
-        self.num_gaussians = 500
+        self.num_gaussians = num_gaussians
         print(f"We have init {self.num_gaussians} gaussians.\n")  
 
         # by default

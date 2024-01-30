@@ -206,6 +206,8 @@ def parse_comma_separated_list(s):
 @click.option('--gs_gen_xyz_offset', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--gs_max_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-4, required=False, show_default=True)
 @click.option('--gs_min_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-7, required=False, show_default=True)
+# GS bank
+@click.option('--num_gaussians', help='Number of gaussian models in the gaussian bank', metavar='INT', type=click.IntRange(min=1), default=500, required=False, show_default=True)
 
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
@@ -304,6 +306,8 @@ def main(**kwargs):
     text_decoder_options = {'gen_rgb':opts.gs_gen_rgb, 'gen_sh':opts.gs_gen_sh, 'gen_opacity':opts.gs_gen_opacity, 'gen_scaling':opts.gs_gen_scaling, 'gen_rotation':opts.gs_gen_rotation, 'gen_xyz_offset':opts.gs_gen_xyz_offset,
                                                                   'max_scaling':opts.gs_max_scaling, 'min_scaling':opts.gs_min_scaling}
     c.G_kwargs.text_decoder_kwargs = text_decoder_options
+    ## GS bank
+    c.G_kwargs.num_gaussians = opts.num_gaussians   
         
     c.loss_kwargs.filter_mode = 'antialiased' # Filter mode for raw images ['antialiased', 'none', float [0-1]]
     c.D_kwargs.disc_c_noise = opts.disc_c_noise # Regularization for discriminator pose conditioning
