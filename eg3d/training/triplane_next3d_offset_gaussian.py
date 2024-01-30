@@ -83,6 +83,7 @@ class TriPlaneGenerator(torch.nn.Module):
         img_channels,               # Number of output color channels.
         sh_degree           = 3,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
+        text_decoder_kwargs = {},   # GS TextureDecoder
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
         rendering_kwargs    = {},
         sr_kwargs = {},
@@ -204,16 +205,21 @@ class TriPlaneGenerator(torch.nn.Module):
             # decode -> UV sample
             
             if self.text_decoder_class == 'TextureDecoder_allAttributes':
+                text_decoder_options={'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0}
+                text_decoder_options.update(text_decoder_kwargs)
                 no_activation_in_decoder=False
                 if no_activation_in_decoder:
-                    self.text_decoder = TextureDecoder_allAttributes_noActivations(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
-                                                                    'gen_rgb':False, 'gen_sh':True, 'gen_opacity':True, 'gen_scaling':True, 'gen_rotation':True, 'gen_xyz_offset':True,
-                                                                  'max_scaling':-4, 'min_scaling':-7})
+                    # self.text_decoder = TextureDecoder_allAttributes_noActivations(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
+                    #                                                 'gen_rgb':False, 'gen_sh':True, 'gen_opacity':True, 'gen_scaling':True, 'gen_rotation':True, 'gen_xyz_offset':True,
+                    #                                               'max_scaling':-4, 'min_scaling':-7})
+                    self.text_decoder = TextureDecoder_allAttributes_noActivations(96, text_decoder_options)
                 else:
-                    self.text_decoder = TextureDecoder_allAttributes(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
-                                                                    'gen_rgb':True, 'gen_sh':False, 'gen_opacity':False, 'gen_scaling':False, 'gen_rotation':False, 'gen_xyz_offset':True,
-                                                                  'max_scaling':1})
                 
+                    # self.text_decoder = TextureDecoder_allAttributes(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0, 
+                    #                                                 'gen_rgb':True, 'gen_sh':False, 'gen_opacity':False, 'gen_scaling':False, 'gen_rotation':False, 'gen_xyz_offset':False,
+                    #                                               'max_scaling':1})
+                    self.text_decoder = TextureDecoder_allAttributes(96, text_decoder_options)
+                    
             elif self.text_decoder_class == 'TextureDecoder_noSigmoid':   
                 self.text_decoder = TextureDecoder_noSigmoid(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
             elif self.text_decoder_class == 'TextureDecoder':
