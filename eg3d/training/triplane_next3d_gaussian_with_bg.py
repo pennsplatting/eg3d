@@ -85,6 +85,7 @@ class TriPlaneGenerator(torch.nn.Module):
         img_channels,               # Number of output color channels.
         num_gaussians,              # Number of gaussian bases in the bank.
         optimize_gaussians, 
+        no_activation_in_decoder,
         bg_resolution, 
         bg_depth,
         sh_degree           = 3,    # Spherical harmonics degree.
@@ -230,10 +231,11 @@ class TriPlaneGenerator(torch.nn.Module):
                 bg_decoder_options = {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0}
                 bg_decoder_options.update(bg_decoder_kwargs)
                 
-                no_activation_in_decoder=False
                 if no_activation_in_decoder:
-                    self.text_decoder = TextureDecoder_allAttributes_noActivations(96, text_decoder_options)
+                    self.text_decoder = TextureDecoder_allAttributes_noActivations(self.planes_channels_uv, text_decoder_options)
+                    self.bg_decoder = TextureDecoder_allAttributes_noActivations(self.planes_channels_bg, bg_decoder_options)
                 else:
+    
                     self.text_decoder = TextureDecoder_allAttributes(self.planes_channels_uv, text_decoder_options)
                     self.bg_decoder = TextureDecoder_allAttributes(self.planes_channels_bg, bg_decoder_options)
                     
