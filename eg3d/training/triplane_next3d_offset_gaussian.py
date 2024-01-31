@@ -82,6 +82,7 @@ class TriPlaneGenerator(torch.nn.Module):
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
         num_gaussians,              # Number of gaussian bases in the bank.
+        optimize_gaussians,
         sh_degree           = 3,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         text_decoder_kwargs = {},   # GS TextureDecoder

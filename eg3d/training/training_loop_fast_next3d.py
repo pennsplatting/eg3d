@@ -346,7 +346,7 @@ def training_loop(
     
     ##### --------------------------
     
-    optimze_gaussians = True
+    optimize_gaussians = G_kwargs.optimize_gaussians
     ## -------------- record some attributes of G -----------------------
     # get original contents
     # with open( 'wt') as f:
@@ -365,7 +365,7 @@ def training_loop(
         )
     
     existing_data.update(
-        {'optimze_gaussians in training_loop':optimze_gaussians}
+        {'optimize_gaussians in training_loop':optimize_gaussians}
         )
     
     # write back
@@ -484,7 +484,7 @@ def training_loop(
             phase.opt.zero_grad(set_to_none=True)
             phase.module.requires_grad_(True)
             
-            if optimze_gaussians:
+            if optimize_gaussians:
                 ## Also set grad for gaussians
                 # print("A")   
                 if 'G' in phase.name:
@@ -537,7 +537,7 @@ def training_loop(
                 
             phase.module.requires_grad_(False)
             
-            if optimze_gaussians:
+            if optimize_gaussians:
                 ## Also set grad for gaussians
                 if 'G' in phase.name:
                     for _gi in range(1, phase.module.num_gaussians+1):
@@ -581,7 +581,7 @@ def training_loop(
                 # if iteration < opt.iterations: 
                 
                 
-                if optimze_gaussians:
+                if optimize_gaussians:
                     if 'G' in phase.name:
                         for _gi in range(1, phase.module.num_gaussians+1):
                             _gs = getattr(phase.module, f"g{_gi}")

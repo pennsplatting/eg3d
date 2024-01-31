@@ -24,8 +24,8 @@ import torch.nn.functional as F
 from training.gaussian_splatting.gaussian_model_xyz_offset import GaussianModel_OffsetXYZ as GaussianModel
 from training.gaussian_splatting.gaussian_model_with_bg import GaussianModel_WithBg as GaussianModel_BG
 from training.gaussian_splatting.cameras import MiniCam
-# from training.gaussian_splatting.renderer import render as gs_render
-from training.gaussian_splatting.renderer_with_bg import render as gs_render
+from training.gaussian_splatting.renderer import render as gs_render
+from training.gaussian_splatting.renderer_with_bg import render as gs_render_with_bg
 from training.gaussian_splatting.utils.graphics_utils import getWorld2View, getProjectionMatrix
 
 import numpy as np
@@ -84,6 +84,7 @@ class TriPlaneGenerator(torch.nn.Module):
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
         num_gaussians,              # Number of gaussian bases in the bank.
+        optimize_gaussians, 
         bg_resolution, 
         bg_depth,
         sh_degree           = 3,    # Spherical harmonics degree.
@@ -585,7 +586,6 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 ## -- bg update finish --
                     
-                
 
                 # get UV features
                 if ('UV' in self.feature_structure):
@@ -642,7 +642,8 @@ class TriPlaneGenerator(torch.nn.Module):
                         current_gaussian.update_textures(textures)
                 
                 # res = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
-                res = gs_render(self.viewpoint_camera, self.bg_gaussian, None, self.background, override_color=override_color)
+                # res = gs_render(self.viewpoint_camera, self.bg_gaussian, None, self.background, override_color=override_color)
+                res = gs_render_with_bg(self.viewpoint_camera, [current_gaussian, self.bg_gaussian], None, self.background, override_color=override_color)
                 
                 _rgb_image = res["render"]
                 _alpha_image = 1 - res["alpha"]
@@ -813,7 +814,7 @@ class TextureDecoder_allAttributes(torch.nn.Module):
         
         self.options = options
         self.out_dim = 3 * options['gen_rgb'] + 3 * options['gen_sh'] + 1 * options['gen_opacity'] + 3 * options['gen_scaling'] + 4 * options['gen_rotation'] + 3 * options['gen_xyz_offset']
-        self.xyz_offset_scale = 6.e-06
+        self.xyz_offset_scale = 6.e-02
         
         self.net = torch.nn.Sequential(
             FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),

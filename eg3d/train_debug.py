@@ -208,6 +208,8 @@ def parse_comma_separated_list(s):
 @click.option('--gs_min_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-7, required=False, show_default=True)
 # GS bank
 @click.option('--num_gaussians', help='Number of gaussian models in the gaussian bank', metavar='INT', type=click.IntRange(min=1), default=500, required=False, show_default=True)
+@click.option('--optimize_gaussians', help='Optimize gaussian attributes of gaussian models in generator', metavar='BOOL',  type=bool, required=False, default=False)
+
 # GS bg
 @click.option('--real_bg', help='Enable real background generation in generator', metavar='BOOL',  type=bool, required=False, default=False)
 # GS bg decoder options
@@ -332,6 +334,7 @@ def main(**kwargs):
         
     ## GS bank
     c.G_kwargs.num_gaussians = opts.num_gaussians   
+    c.G_kwargs.optimize_gaussians = opts.optimize_gaussians
         
     c.loss_kwargs.filter_mode = 'antialiased' # Filter mode for raw images ['antialiased', 'none', float [0-1]]
     c.D_kwargs.disc_c_noise = opts.disc_c_noise # Regularization for discriminator pose conditioning
