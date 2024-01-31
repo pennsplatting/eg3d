@@ -173,7 +173,7 @@ class TriPlaneGenerator(torch.nn.Module):
             target_mean = self.verts.mean(dim=0)
             
             scale_factor = 1 / 3.4 # observed by the scale difference: eg3d = scale_factor * 3dmm
-            obj_folder = '/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/checkpoints/pretrained/results/00000_1k_no_rotation/epoch_20_000000'
+            obj_folder = '/home/ritz/eg3d/eg3d/data/gaussian_bank/front_face_gaussian_1k/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/checkpoints/pretrained/results/00000_1k_no_rotation/epoch_20_000000'
             obj_paths = [os.path.join(obj_folder, i) for i in sorted(os.listdir(obj_folder)) if i.endswith('obj')]
             total_different = len(obj_paths)
             
@@ -234,7 +234,7 @@ class TriPlaneGenerator(torch.nn.Module):
             
             
     def keep_only_front_face_UV(self):
-        bfm_folder = '/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/BFM'
+        bfm_folder = '/home/ritz/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/BFM'
         index_exp = loadmat(osp.join(bfm_folder, 'BFM_front_idx.mat'))
         index_exp = index_exp['idx'].astype(np.int32) - 1  # starts from 0 (to 53215)
         
