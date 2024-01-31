@@ -560,7 +560,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 if self.bg_decoder.options['gen_scaling']:
                     _scaling = textures[0,start_dim:start_dim+3,0].permute(1,0)
-                    self.bg_gaussian.update_scaling(_scaling, max_s = self.text_decoder.options['max_scaling'], min_s = self.text_decoder.options['min_scaling'])
+                    self.bg_gaussian.update_scaling(_scaling, max_s = self.bg_decoder.options['max_scaling'], min_s = self.bg_decoder.options['min_scaling'])
                     start_dim += 3
                     
                 if self.bg_decoder.options['gen_rotation']:
