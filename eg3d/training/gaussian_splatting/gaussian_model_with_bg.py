@@ -343,8 +343,11 @@ class GaussianModel_WithBg:
         self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True) # [V, 1, 3]
         self._features_rest = features[:,:,1:].transpose(1, 2).contiguous()#.requires_grad_(True)# [V, sh degree - 1, 3]
     
-    def update_xyz_offset(self, xyz_offset):
-        self._xyz = self._xyz_base + xyz_offset
+    # def update_xyz_offset(self, xyz_offset):
+    #     self._xyz = self._xyz_base + xyz_offset
+
+    def update_xyz(self, new_xyz):
+        self._xyz = new_xyz
 
     def update_opacity(self, opacity):
         self._opacity = opacity

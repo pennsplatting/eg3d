@@ -84,10 +84,11 @@ class TriPlaneGenerator(torch.nn.Module):
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
         num_gaussians,              # Number of gaussian bases in the bank.
+        bg_resolution, 
+        bg_depth,
         sh_degree           = 3,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         text_decoder_kwargs = {},   # GS TextureDecoder
-        bg_resolution       = 256, 
         bg_decoder_kwargs   = {},   # GS BackgroundDecoder
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
         rendering_kwargs    = {},
@@ -205,6 +206,7 @@ class TriPlaneGenerator(torch.nn.Module):
         # bg gaussian
         self.bg_resolution = bg_resolution
         bg_verts = torch.rand([self.bg_resolution * self.bg_resolution, 3]).to(self.verts.device) - 0.5
+        self.bg_depth = bg_depth
         
         self.bg_gaussian = GaussianModel_BG(self.sh_degree, bg_verts)
         uv_size = (self.bg_resolution, self.bg_resolution)
@@ -290,6 +292,7 @@ class TriPlaneGenerator(torch.nn.Module):
             'backbone output planes_channels(Background)': self.planes_channels_bg,
             "bg_gaussian": self.bg_gaussian.__class__.__name__,
             "bg_resolution": self.bg_resolution, 
+            "bg_depth": self.bg_depth,
             
         }
         
@@ -527,14 +530,12 @@ class TriPlaneGenerator(torch.nn.Module):
            
             _xyz_offset = None
             ## TODO: can gaussiam splatting run batch in parallel?
-            for _cam2world_matrix, textures_gen, bg_gen in zip(cam2world_matrix, textures_gen_batch, bg_gen_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
+            for _cam2world_matrix, _intrinsics, textures_gen, bg_gen in zip(cam2world_matrix, intrinsics, textures_gen_batch, bg_gen_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
                 # randomly select a new gaussian for each rendering
                 current_gaussian = self.get_a_gaussian()
                 self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
                 
                 # update bg gaussian
-                ## TODO: update bg gaussian _xyz according to c2w
-                ## update the remaining attributes as generated
                 ## -- bg update starts -- 
                 start_dim = 0
                 _C, _H, bg_gen.shape
@@ -565,11 +566,20 @@ class TriPlaneGenerator(torch.nn.Module):
                     self.bg_gaussian.update_rotation(_rotation)
                     start_dim += 4
                 
+                ## update bg gaussian _xyz according to c2w
+                # current_gaussian._xyz[..., -1].min() -> tensor(0.0047, device='cuda:0'): z_far
+                # current_gaussian._xyz[..., -1].max() -> tensor(0.2887, device='cuda:0'): z_near
+                # under world coord, smaller (more negative) is behind the face
+                # WARN: do not move the position of this line, since the attributes have an order
+                ray_origins, ray_directions = self.ray_sampler(_cam2world_matrix[None], _intrinsics[None], self.bg_resolution)
+                bg_xyz = (ray_origins + ray_directions * self.bg_depth)[0]
+                
                 if self.bg_decoder.options['gen_xyz_offset']:
                     _xyz_offset = textures[0,start_dim:start_dim+3,0].permute(1,0)
-                    self.bg_gaussian.update_xyz_offset(_xyz_offset)
+                    bg_xyz += _xyz_offset
                     start_dim += 3
                     
+                self.bg_gaussian.update_xyz(bg_xyz)
             
                 assert start_dim==textures.shape[1]
                 

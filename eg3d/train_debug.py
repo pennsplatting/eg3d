@@ -219,6 +219,8 @@ def parse_comma_separated_list(s):
 @click.option('--bg_gen_xyz_offset', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
 @click.option('--bg_max_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-4, required=False, show_default=True)
 @click.option('--bg_min_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-7, required=False, show_default=True)
+@click.option('--bg_resolution', help='Resolution of num gaussians used to render bg', metavar='INT', type=click.IntRange(min=1), default=128, required=False, show_default=True)
+@click.option('--bg_depth', help='How many (ray_origin + ray_dir * bg_depth) is used to control the distance of bg gaussian to image plane', metavar='INT', type=click.IntRange(min=1), default=5, required=False, show_default=True)
 
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
@@ -325,6 +327,9 @@ def main(**kwargs):
         bg_decoder_options = {'gen_rgb':opts.bg_gen_rgb, 'gen_sh':opts.bg_gen_sh, 'gen_opacity':opts.bg_gen_opacity, 'gen_scaling':opts.bg_gen_scaling, 'gen_rotation':opts.bg_gen_rotation, 'gen_xyz_offset':opts.bg_gen_xyz_offset,
                                                                   'max_scaling':opts.bg_max_scaling, 'min_scaling':opts.bg_min_scaling}
         c.G_kwargs.bg_decoder_kwargs = bg_decoder_options
+        c.G_kwargs.bg_resolution = opts.bg_resolution
+        c.G_kwargs.bg_depth = opts.bg_depth
+        
     ## GS bank
     c.G_kwargs.num_gaussians = opts.num_gaussians   
         
