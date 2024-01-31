@@ -121,7 +121,7 @@ class GaussianModel_WithBg:
     
     def get_copy(self):
         # Create a new instance of GaussianModel
-        copied_instance = GaussianModel_OffsetXYZ(sh_degree=self.max_sh_degree, verts=self._xyz, index=self.index, active_sh_degree=self.active_sh_degree)
+        copied_instance = GaussianModel_WithBg(sh_degree=self.max_sh_degree, verts=self._xyz, index=self.index, active_sh_degree=self.active_sh_degree)
 
         # Copy the necessary attributes
         copied_instance._xyz = self._xyz.clone().detach()  # Detach if needed
