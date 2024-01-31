@@ -208,6 +208,17 @@ def parse_comma_separated_list(s):
 @click.option('--gs_min_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-7, required=False, show_default=True)
 # GS bank
 @click.option('--num_gaussians', help='Number of gaussian models in the gaussian bank', metavar='INT', type=click.IntRange(min=1), default=500, required=False, show_default=True)
+# GS bg
+@click.option('--real_bg', help='Enable real background generation in generator', metavar='BOOL',  type=bool, required=False, default=False)
+# GS bg decoder options
+@click.option('--bg_gen_rgb', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--bg_gen_sh', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
+@click.option('--bg_gen_opacity', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--bg_gen_scaling', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--bg_gen_rotation', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--bg_gen_xyz_offset', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--bg_max_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-4, required=False, show_default=True)
+@click.option('--bg_min_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-7, required=False, show_default=True)
 
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
@@ -288,6 +299,8 @@ def main(**kwargs):
     # c.G_kwargs.class_name = 'training.triplane_next3d.TriPlaneGenerator'
     # c.G_kwargs.class_name = 'training.triplane_next3d_multiple_gaussian.TriPlaneGenerator'
     c.G_kwargs.class_name = 'training.triplane_next3d_offset_gaussian.TriPlaneGenerator'
+    if opts.real_bg:
+        c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_bg.TriPlaneGenerator'
     print('c.G_kwargs.class_name:', c.G_kwargs.class_name)
     ## D
     if not opts.use_mask_condition:
@@ -306,6 +319,12 @@ def main(**kwargs):
     text_decoder_options = {'gen_rgb':opts.gs_gen_rgb, 'gen_sh':opts.gs_gen_sh, 'gen_opacity':opts.gs_gen_opacity, 'gen_scaling':opts.gs_gen_scaling, 'gen_rotation':opts.gs_gen_rotation, 'gen_xyz_offset':opts.gs_gen_xyz_offset,
                                                                   'max_scaling':opts.gs_max_scaling, 'min_scaling':opts.gs_min_scaling}
     c.G_kwargs.text_decoder_kwargs = text_decoder_options
+    
+    ## GS BG Decoder options
+    if opts.real_bg:
+        bg_decoder_options = {'gen_rgb':opts.bg_gen_rgb, 'gen_sh':opts.bg_gen_sh, 'gen_opacity':opts.bg_gen_opacity, 'gen_scaling':opts.bg_gen_scaling, 'gen_rotation':opts.bg_gen_rotation, 'gen_xyz_offset':opts.bg_gen_xyz_offset,
+                                                                  'max_scaling':opts.bg_max_scaling, 'min_scaling':opts.bg_min_scaling}
+        c.G_kwargs.bg_decoder_kwargs = bg_decoder_options
     ## GS bank
     c.G_kwargs.num_gaussians = opts.num_gaussians   
         
