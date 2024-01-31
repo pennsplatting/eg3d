@@ -731,3 +731,406 @@ class GaussianModel_OffsetXYZ:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+
+# Gaussian in batch
+class GaussianModel_Batch:
+
+    def setup_functions(self):
+        
+        self.scaling_activation = torch.exp
+        self.scaling_inverse_activation = torch.log
+
+        self.covariance_activation = build_covariance_from_scaling_rotation
+
+        self.opacity_activation = torch.sigmoid
+        self.inverse_opacity_activation = inverse_sigmoid
+
+        self.rotation_activation = torch.nn.functional.normalize
+
+
+    def __init__(self, sh_degree : int, verts, index=-1, active_sh_degree=0):
+        self.active_sh_degree = min(active_sh_degree, sh_degree)
+        
+        self.update_iterations = 0 # to record how many times this gaussian has been updated. for the use of oneupSHdegree()
+        self.update_interval = 10000
+        self.max_sh_degree = sh_degree 
+        # self._xyz = torch.empty(0)
+        self._xyz_base = torch.empty(0)
+        self._features_dc = torch.empty(0)
+        self._features_rest = torch.empty(0)
+        self._scaling = torch.empty(0)
+        self._rotation = torch.empty(0)
+        self._opacity = torch.empty(0)
+        self.max_radii2D = torch.empty(0)
+        self.xyz_gradient_accum = torch.empty(0)
+        self.denom = torch.empty(0)
+        self.optimizer = None
+        self.percent_dense = 0
+        self.spatial_lr_scale = 0
+        self.setup_functions()
+        self.init_point_cloud(verts)
+        self.index = index
+        self.training_setup(gs_training_args)
+        self.max_s = None
+        self.min_s = None
+        # print(f"init gs_{self.index} has activeSH={self.active_sh_degree}; maxSH={self.max_sh_degree}")
+    
+
+    def capture(self):
+        return (
+            self.active_sh_degree,
+            self._xyz,
+            self._features_dc,
+            self._features_rest,
+            self._scaling,
+            self._rotation,
+            self._opacity,
+            self.max_radii2D,
+            self.xyz_gradient_accum,
+            self.denom,
+            self.optimizer.state_dict(),
+            self.spatial_lr_scale,
+        )
+    
+    def get_copy(self):
+        # Create a new instance of GaussianModel
+        copied_instance = GaussianModel_Batch(sh_degree=self.max_sh_degree, verts=self._xyz, index=self.index, active_sh_degree=self.active_sh_degree)
+
+        # Copy the necessary attributes
+        copied_instance._xyz = self._xyz.clone().detach()  # Detach if needed
+        copied_instance._features_dc = self._features_dc.clone().detach()
+        copied_instance._features_rest = self._features_rest.clone().detach()
+        copied_instance._scaling = self._scaling.clone().detach()
+        copied_instance._rotation = self._rotation.clone().detach()
+        copied_instance._opacity = self._opacity.clone().detach()
+        copied_instance.max_radii2D = self.max_radii2D.clone().detach()
+        copied_instance.xyz_gradient_accum = self.xyz_gradient_accum.clone().detach()
+        copied_instance.denom = self.denom.clone().detach()
+        
+        return copied_instance #TODO: test this function
+    
+    def parameters(self):
+        """
+        Returns an iterator over the parameters of the GaussianModel.
+
+        Returns:
+            Iterator: Iterator over parameters.
+        """
+        # Define your logic to return parameters here
+        # For example, if your parameters are stored in a list, you can return that list
+        return [self._scaling, self._rotation, self._opacity]
+        ## FIXME: self._features_dc, self._features_rest: non-leaf tensors, cannot requries grad=False
+
+    
+    def requires_grad(self, requires_grad=True):
+        """
+        Toggles the calculation of gradients for the parameters of the GaussianModel.
+
+        Args:
+            requires_grad (bool): If True, gradients will be calculated for the parameters.
+                                 If False, gradients will not be calculated.
+
+        Returns:
+            None
+        """
+        for param in self.parameters():
+            param.requires_grad_(requires_grad)
+    
+    def restore(self, model_args, training_args):
+        (self.active_sh_degree, 
+        self._xyz, 
+        self._features_dc, 
+        self._features_rest,
+        self._scaling, 
+        self._rotation, 
+        self._opacity,
+        self.max_radii2D, 
+        xyz_gradient_accum, 
+        denom,
+        opt_dict, 
+        self.spatial_lr_scale) = model_args
+        self.training_setup(training_args)
+        self.xyz_gradient_accum = xyz_gradient_accum
+        self.denom = denom
+        self.optimizer.load_state_dict(opt_dict)
+
+    @property
+    def get_scaling(self):
+        if (self.max_s is not None) or (self.min_s is not None):
+        # if (getattr(self, 'max_s', None) is not None) or (self.min_s is not None):
+            # return torch.clamp(self.scaling_activation(self._scaling), max=self.max_s, min=self.min_s)
+            return self.scaling_activation(torch.clamp(self._scaling, max=self.max_s, min=self.min_s))
+        
+        return self.scaling_activation(self._scaling)
+    
+    @property
+    def get_rotation(self):
+        return self.rotation_activation(self._rotation)
+    
+    @property
+    def get_xyz(self):
+        return self._xyz
+    
+    @property
+    def get_features(self):
+        features_dc = self._features_dc
+        features_rest = self._features_rest
+        
+        return torch.cat((features_dc, features_rest), dim=1)
+    
+    @property
+    def get_opacity(self):
+        return self.opacity_activation(self._opacity)
+    
+    def get_covariance(self, scaling_modifier = 1):
+        return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
+
+    def oneupSHdegree(self):
+        if self.active_sh_degree < self.max_sh_degree:
+            self.active_sh_degree += 1
+
+    def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float):
+        self.spatial_lr_scale = spatial_lr_scale
+        fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
+        fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
+        features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda() # [N, 3, 16]
+        features[:, :3, 0 ] = fused_color
+        features[:, 3:, 1:] = 0.0
+
+        # print("Number of points at initialisation : ", fused_point_cloud.shape[0])
+
+        dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
+        rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
+        rots[:, 0] = 1
+
+        opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
+
+        self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
+        self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
+        self._scaling = nn.Parameter(scales.requires_grad_(True))
+        self._rotation = nn.Parameter(rots.requires_grad_(True))
+        self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+
+    # TODO: create gaussian from generated texture
+    # this function is corresponding to the "create_from_pcd" in the original gs implementation, but removed the parameterization for color 
+    def init_point_cloud(self, verts):
+        # TODO: freeze some parameters, like self._xyz?
+        self._xyz_base = verts
+        self._xyz = verts
+        self.spatial_lr_scale = 0 # FIXME: hardcoded from original GS implementation, explained by authors in issue
+
+        dist2 = torch.clamp_min(distCUDA2(self._xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3) # min: -8.0590, max: -4.3734, mode: -7~-6
+        rots = torch.zeros((self._xyz.shape[0], 4), device="cuda")
+        rots[:, 0] = 1
+
+        
+        if gs_training_args.opacity_lr==0:
+            # print("when no lr for opacity, init opacity to ones")
+            opacities = torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda")
+        else:
+            opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
+        self._scaling = nn.Parameter(scales.requires_grad_(True))
+        self._rotation = nn.Parameter(rots.requires_grad_(True))
+        self._opacity = nn.Parameter(opacities.requires_grad_(True))        
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+
+    # for test
+    def create_from_ply(self, path, spatial_lr_scale : float):
+        plydata = PlyData.read(path)
+
+        xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
+                        np.asarray(plydata.elements[0]["y"]),
+                        np.asarray(plydata.elements[0]["z"])),  axis=1)
+
+
+        features = torch.zeros((xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda() # [N, 3, 16]
+
+        features_dc = np.zeros((xyz.shape[0], 3, 1))
+        features_dc = np.stack((np.asarray(plydata.elements[0]["red"]),
+                                np.asarray(plydata.elements[0]["green"]),
+                                np.asarray(plydata.elements[0]["blue"])), axis=1)
+        features[:, :3, 0 ] = RGB2SH(torch.tensor(features_dc, dtype=torch.float, device="cuda"))
+        features[:, 3:, 1:] = 0.0
+
+        # self.active_sh_degree = self.max_sh_degree
+
+        # print("Number of points at initialisation : ", xyz.shape[0])
+
+        dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(xyz)).float().cuda()), 0.0000001)
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
+        rots = torch.zeros((xyz.shape[0], 4), device="cuda")
+        rots[:, 0] = 1
+
+        opacities = inverse_sigmoid(0.1 * torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda"))
+        # opacities = torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda")
+
+        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
+        self._scaling = nn.Parameter(scales.requires_grad_(True))
+        self._rotation = nn.Parameter(rots.requires_grad_(True))
+        self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+    
+    # to update gaussian bank
+    def update_textures(self, feature_uv):
+        # self.update_iterations += 1 # do this before update. start from activeSH=0
+        # # print(f"gs_{self.index} at iteration {self.update_iterations}")
+        
+        # if self.update_iterations % self.update_interval == 0:
+        #     self.oneupSHdegree()
+        #     print(f"gs{self.index} now has {self.active_sh_degree} active_sh_degree")
+            
+        # print(f"feature_uv min={feature_uv.min()}, max={feature_uv.max()}")
+        
+        N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
+        features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
+        # print(f"--shs: min={shs.min()}, max={shs.max()}, mean={shs.mean()}, shape={shs.shape}")
+        # features = torch.zeros((xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        ## FIXME: although all features are mapped from RGB[0,1] to SH now, the original GS uses 0 for self._feature_rest
+
+        # print(f"features.requires_grad: {features.requires_grad}") # True when 'G' in phase.name, False when 'D' in phase.name
+        # if features.requires_grad:
+        #     features.retain_grad()
+        #     features.register_hook(lambda grad: print_grad("------features.requires_grad", grad))
+        ## not optimizing features_dc, but rather it comes from the generator
+        ## thus both the below are set to: requires_grad -> False   
+        self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True)
+        self._features_rest = features[:,:,1:].transpose(1, 2).contiguous()#.requires_grad_(True)
+        # print(f"self._features_dc.requires_grad: {self._features_dc.requires_grad}, self._features_rest.requires_grad: {self._features_rest.requires_grad}")
+        
+        # self._xyz.register_hook(lambda grad: print_grad("------_xyz.requires_grad", grad))
+        # self._scaling.register_hook(lambda grad: print_grad("------_scaling.requires_grad", grad))
+        # self._rotation.register_hook(lambda grad: print_grad("------_rotation.requires_grad", grad))
+        # self._opacity.register_hook(lambda grad: print_grad("------_opacity.requires_grad", grad))
+    
+    # to update gaussian bank
+    def update_sh_texture(self, feature_uv):
+        V, C = feature_uv.shape # (1, 48, 1, 5023)
+        features = feature_uv.reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
+       
+        self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True) # [V, 1, 3]
+        self._features_rest = features[:,:,1:].transpose(1, 2).contiguous()#.requires_grad_(True)# [V, sh degree - 1, 3]
+    
+    def update_xyz_offset(self, xyz_offset):
+        self._xyz = self._xyz_base + xyz_offset
+
+    def update_opacity(self, opacity):
+        self._opacity = opacity
+
+    def update_scaling(self, scaling, max_s=None, min_s=None):  
+        # clamp settings
+        self.max_s = max_s
+        self.min_s = min_s
+        
+        # update
+        self._scaling = scaling
+    
+    def update_rotation(self, rotation):
+        self._rotation = rotation
+
+        
+    ## for assigning rgb texture to G.debug_gaussian. Not for other gaussians
+    def update_rgb_textures(self, feature_uv):
+        '''
+            feature_uv: [Npts, 3]
+        '''
+
+        # N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
+        # features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
+        # print(f"--shs: min={shs.min()}, max={shs.max()}, mean={shs.mean()}, shape={shs.shape}")
+        features = torch.zeros((self._xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        ## FIXME: although all features are mapped from RGB[0,1] to SH now, the original GS uses 0 for self._feature_rest
+        features[:,:3, 0] = RGB2SH(feature_uv) # (53215, 3): 0~1 -> -1.7~+1.7
+        features[:, 3:, 1:] = 0.0
+
+        # self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(False))
+        self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True)
+        self._features_rest = features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True)
+        
+        # features.requires_grad_(True)
+        # features.register_hook(lambda grad: print_grad("------features.requires_grad", grad))
+        
+        # self._features_dc.requires_grad_(True)
+        # self._features_dc.register_hook(lambda grad: print_grad("------self._features_dc.requires_grad", grad))
+        # self._features_rest.requires_grad_(True) ## exactly the same as the grad of inside gs_render(): shs.grad
+        # self._features_rest.register_hook(lambda grad: print_grad("------self._features_rest.requires_grad", grad))
+        
+        # self._scaling = nn.Parameter(scales.requires_grad_(True))
+        # self._rotation = nn.Parameter(rots.requires_grad_(True))
+        # self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        # self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        
+    # for test
+    def create_from_ply2(self, feature_uv):
+        print("should Not in create_from_ply2")
+        exit(0)
+        N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
+        features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
+        # features = torch.zeros((xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        # features[:, :3, 0 ] = RGB2SH(feature_uv) # (53215, 3)
+        # features[:, 3:, 1:] = 0.0
+
+        # self.active_sh_degree = self.max_sh_degree
+
+        # print("Number of points at initialisation : ", xyz.shape[0])
+
+        dist2 = torch.clamp_min(distCUDA2(self._xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
+        rots = torch.zeros((self._xyz.shape[0], 4), device="cuda")
+        rots[:, 0] = 1
+
+        opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
+        # opacities = torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda")
+
+        # self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(False))
+        self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
+        
+        features.requires_grad_(True)
+        features.register_hook(lambda grad: print_grad("------features.requires_grad", grad))
+        # self._features_dc.requires_grad_(True)
+        # self._features_dc.register_hook(lambda grad: print_grad("------self._features_dc.requires_grad", grad))
+        # self._features_rest.requires_grad_(True) ## exactly the same as the grad of inside gs_render(): shs.grad
+        # self._features_rest.register_hook(lambda grad: print_grad("------self._features_rest.requires_grad", grad))
+        
+        self._scaling = nn.Parameter(scales.requires_grad_(True))
+        self._rotation = nn.Parameter(rots.requires_grad_(True))
+        self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+
+    def training_setup(self, training_args):
+        self.percent_dense = training_args.percent_dense
+        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        
+       
+        l = [
+            # {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
+            {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
+            {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
+            {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
+            {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
+            {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"}
+        ]
+        
+
+        self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+        
+        # FIXME: not pickle-able. Adjusting the lr foir xyz dynamically.
+        # self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
+        #                                             lr_final=training_args.position_lr_final*self.spatial_lr_scale,
+        #                                             lr_delay_mult=training_args.position_lr_delay_mult,
+        #                                             max_steps=training_args.position_lr_max_steps)
+
+    def update_learning_rate(self, iteration):
+        ''' Learning rate scheduling per step '''
+        for param_group in self.optimizer.param_groups:
+            if param_group["name"] == "xyz":
+                lr = self.xyz_scheduler_args(iteration)
+                param_group['lr'] = lr
+                return lr

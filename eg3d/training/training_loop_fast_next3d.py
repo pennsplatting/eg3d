@@ -678,15 +678,15 @@ def training_loop(
             out = [G_ema(z=z, c=c, noise_mode='const') for z, c in zip(grid_z, grid_c)]
             images = torch.cat([o['image'].cpu() for o in out]).detach().numpy()
             images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
-            images_mask = torch.cat([o['image_mask'].cpu() for o in out]).detach().numpy()
-            images_real = torch.cat([o['image_real'].cpu() for o in out]).detach().numpy() # FIXME: init with gt texture for debug
+            # images_mask = torch.cat([o['image_mask'].cpu() for o in out]).detach().numpy()
+            # images_real = torch.cat([o['image_real'].cpu() for o in out]).detach().numpy() # FIXME: init with gt texture for debug
             # save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
             rgb_drange = [-1,1] if G_ema.normalize_rgb_image else [0,1]
             
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=rgb_drange, grid_size=grid_size)
             save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=rgb_drange, grid_size=grid_size)
-            save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[0, 1], grid_size=grid_size)
-            save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[0,1], grid_size=grid_size)
+            # save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[0, 1], grid_size=grid_size)
+            # save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[0,1], grid_size=grid_size)
             
             save_override_color = getattr(G_ema, 'use_colors_precomp')
             
