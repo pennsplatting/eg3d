@@ -294,7 +294,8 @@ class TriPlaneGenerator(torch.nn.Module):
             "bg_gaussian": self.bg_gaussian.__class__.__name__,
             "bg_resolution": self.bg_resolution, 
             "bg_depth": self.bg_depth,
-            
+            "bg_decoder output attriutes": getattr(self.bg_decoder, 'options', None),
+
         }
         
         return attributes_to_record
