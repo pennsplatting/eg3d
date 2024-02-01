@@ -206,7 +206,7 @@ def parse_comma_separated_list(s):
 @click.option('--gs_gen_xyz_offset', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--gs_max_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-4, required=False, show_default=True)
 @click.option('--gs_min_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-7, required=False, show_default=True)
-@click.option('--no_activation_in_decoder', help='No activation in decoding, but act when getting GS attributes', metavar='BOOL',  type=bool, required=False, default=False)
+@click.option('--no_activation_in_decoder', help='No activation in decoding, but act when getting GS attributes', metavar='BOOL',  type=bool, required=False, default=True) # default is no activation
 # GS bank
 @click.option('--num_gaussians', help='Number of gaussian models in the gaussian bank', metavar='INT', type=click.IntRange(min=1), default=500, required=False, show_default=True)
 @click.option('--optimize_gaussians', help='Optimize gaussian attributes of gaussian models in generator', metavar='BOOL',  type=bool, required=False, default=False)
