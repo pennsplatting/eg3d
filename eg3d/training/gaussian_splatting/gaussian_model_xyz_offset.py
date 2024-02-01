@@ -731,3 +731,134 @@ class GaussianModel_OffsetXYZ:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+        
+        
+class GaussianModelBatch:
+    def setup_functions(self):
+        
+        self.scaling_activation = torch.exp
+        self.scaling_inverse_activation = torch.log
+
+        self.covariance_activation = build_covariance_from_scaling_rotation
+
+        self.opacity_activation = torch.sigmoid
+        self.inverse_opacity_activation = inverse_sigmoid
+
+        self.rotation_activation = torch.nn.functional.normalize
+    
+    def __init__(self, sh_degree, B, verts, active_sh_degree=0):
+        V = verts.shape[0]
+        self.active_sh_degree = min(active_sh_degree, sh_degree)
+        self.max_sh_degree = sh_degree 
+        self._xyz = torch.randn((B, V, 3), device="cuda")
+        self._xyz_base = verts.repeat(B,1,1,1)
+        self._features = torch.randn((B, V, 1, 3), device="cuda")
+        # self._features_dc = torch.empty(0)
+        # self._features_rest = torch.empty(0)
+        self._scaling = torch.randn((B, V, 3), device="cuda")
+        self._rotation = torch.randn((B, V, 4), device="cuda")
+        self._opacity = torch.randn((B, V, 1), device="cuda")
+        self.covariance = torch.randn((B, V, 1), device="cuda")
+        # self.max_radii2D = torch.empty(0)
+        # self.xyz_gradient_accum = torch.empty(0)
+        # self.denom = torch.empty(0)
+        # self.optimizer = None
+        # self.percent_dense = 0
+        # self.spatial_lr_scale = 0
+        # self.setup_functions()
+        # self.init_point_cloud(verts)
+        # self.index = index
+        # self.training_setup(gs_training_args)
+        # self.max_s = None
+        # self.min_s = None
+        
+    @property
+    def get_scaling(self):
+        # return self._scaling
+        if (self.max_s is not None) or (self.min_s is not None):
+        # if (getattr(self, 'max_s', None) is not None) or (self.min_s is not None):
+            # return torch.clamp(self.scaling_activation(self._scaling), max=self.max_s, min=self.min_s)
+            return self.scaling_activation(torch.clamp(self._scaling, max=self.max_s, min=self.min_s))
+        
+        return self.scaling_activation(self._scaling)
+    
+    @property
+    def get_rotation(self):
+        return self.rotation_activation(self._rotation)
+        # return self._rotation
+    
+    @property
+    def get_xyz(self):
+        return self._xyz
+    
+    @property
+    def get_features(self):
+        features_dc = self._features_dc
+        features_rest = self._features_rest
+        
+        return torch.cat((features_dc, features_rest), dim=1)
+        # return self._features
+    
+    @property
+    def get_opacity(self):
+        return self.opacity_activation(self._opacity)
+        # return self._opacity
+    
+    def get_covariance(self, scaling_modifier = 1):
+        return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
+        # return self.covariance
+    
+    # to update gaussian bank
+    def update_sh_texture(self, feature_uv):
+        B, V, C = feature_uv.shape
+        features = feature_uv.reshape(B,V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
+       
+        self._features_dc = features[:,:,:,0:1].transpose(3, 2).contiguous()#.requires_grad_(True) # [V, 1, 3]
+        self._features_rest = features[:,:,:,1:].transpose(3, 2).contiguous()#.requires_grad_(True)# [V, sh degree - 1, 3]
+    
+    def update_xyz_offset(self, xyz_offset):
+        self._xyz = self._xyz_base + xyz_offset
+
+    def update_opacity(self, opacity):
+        self._opacity = opacity
+
+    def update_scaling(self, scaling, max_s=None, min_s=None):  
+        # clamp settings
+        self.max_s = max_s
+        self.min_s = min_s
+        
+        # update
+        self._scaling = scaling
+    
+    def update_rotation(self, rotation):
+        self._rotation = rotation
+        
+    ## for assigning rgb texture to G.debug_gaussian. Not for other gaussians
+    def update_rgb_textures(self, feature_uv):
+        '''
+            feature_uv: [B, Npts, 3]
+        '''
+
+        B, V, _ = feature_uv.shape # (1, 48, 1, 5023)
+        # features = feature_uv.permute(3,1,2,0).reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
+        # print(f"--shs: min={shs.min()}, max={shs.max()}, mean={shs.mean()}, shape={shs.shape}")
+        features = torch.zeros((B, V, 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        ## FIXME: although all features are mapped from RGB[0,1] to SH now, the original GS uses 0 for self._feature_rest
+        features[:,:,:3, 0] = RGB2SH(feature_uv) # (53215, 3): 0~1 -> -1.7~+1.7
+        features[:,:, 3:, 1:] = 0.0
+
+        # self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(False))
+        self._features_dc = features[:,:,:,0:1].transpose(3, 2).contiguous()#.requires_grad_(True)
+        self._features_rest = features[:,:,:,1:].transpose(3, 2).contiguous().requires_grad_(True)
+        
+    def append(self, i, gs):
+        if gs.get_features.shape[0] > 0:
+            self._xyz[i, ...] = gs._xyz
+            self._features[i, ...] = gs._features
+            self._opacity[i, ...] = gs._opacity
+            self._rotation[i, ...] = gs._rotation
+            self._scaling[i, ...] = gs._scaling
+            
+    
+        
+        

@@ -15,6 +15,7 @@ Code adapted from
 "Alias-Free Generative Adversarial Networks"."""
 
 import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import click
 import re
 import json
