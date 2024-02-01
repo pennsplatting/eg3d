@@ -200,7 +200,7 @@ def parse_comma_separated_list(s):
 # Decoder structure choice
 @click.option('--no_activation_in_decoder', help='No activation in decoding, but act when getting GS attributes', metavar='BOOL',  type=bool, required=False, default=True) # default is no activation
 # GS texture decoder options
-@click.option('--gs_gen_rgb', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
+@click.option('--gs_gen_rgb', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
 @click.option('--gs_gen_sh', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--gs_gen_opacity', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--gs_gen_scaling', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
