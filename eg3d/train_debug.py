@@ -197,6 +197,8 @@ def parse_comma_separated_list(s):
 @click.option('--decoder_lr_mul',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
 # mask condition
 @click.option('--use_mask_condition', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
+# Decoder structure choice
+@click.option('--no_activation_in_decoder', help='No activation in decoding, but act when getting GS attributes', metavar='BOOL',  type=bool, required=False, default=True) # default is no activation
 # GS texture decoder options
 @click.option('--gs_gen_rgb', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--gs_gen_sh', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
@@ -204,9 +206,11 @@ def parse_comma_separated_list(s):
 @click.option('--gs_gen_scaling', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--gs_gen_rotation', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--gs_gen_xyz_offset', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
+@click.option('--gs_xyz_offset_scale',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=6.e-06, required=False, show_default=True)
 @click.option('--gs_max_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-4, required=False, show_default=True)
 @click.option('--gs_min_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-7, required=False, show_default=True)
-@click.option('--no_activation_in_decoder', help='No activation in decoding, but act when getting GS attributes', metavar='BOOL',  type=bool, required=False, default=True) # default is no activation
+@click.option('--gs_scale_bias',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-5, required=False, show_default=True)
+@click.option('--gs_scale_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
 # GS bank
 @click.option('--num_gaussians', help='Number of gaussian models in the gaussian bank', metavar='INT', type=click.IntRange(min=1), default=500, required=False, show_default=True)
 @click.option('--optimize_gaussians', help='Optimize gaussian attributes of gaussian models in generator', metavar='BOOL',  type=bool, required=False, default=False)
@@ -220,8 +224,11 @@ def parse_comma_separated_list(s):
 @click.option('--bg_gen_scaling', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
 @click.option('--bg_gen_rotation', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
 @click.option('--bg_gen_xyz_offset', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--bg_xyz_offset_scale',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=6.e-06, required=False, show_default=True)
 @click.option('--bg_max_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-4, required=False, show_default=True)
 @click.option('--bg_min_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-7, required=False, show_default=True)
+@click.option('--bg_scale_bias',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-5, required=False, show_default=True)
+@click.option('--bg_scale_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
 @click.option('--bg_resolution', help='Resolution of num gaussians used to render bg', metavar='INT', type=click.IntRange(min=1), default=128, required=False, show_default=True)
 @click.option('--bg_depth', help='How many (ray_origin + ray_dir * bg_depth) is used to control the distance of bg gaussian to image plane', metavar='INT', type=click.IntRange(min=1), default=5, required=False, show_default=True)
 
@@ -322,13 +329,15 @@ def main(**kwargs):
     
     ## GS Texture Decoder options
     text_decoder_options = {'gen_rgb':opts.gs_gen_rgb, 'gen_sh':opts.gs_gen_sh, 'gen_opacity':opts.gs_gen_opacity, 'gen_scaling':opts.gs_gen_scaling, 'gen_rotation':opts.gs_gen_rotation, 'gen_xyz_offset':opts.gs_gen_xyz_offset,
-                                                                  'max_scaling':opts.gs_max_scaling, 'min_scaling':opts.gs_min_scaling}
+                                                                  'max_scaling':opts.gs_max_scaling, 'min_scaling':opts.gs_min_scaling, 'xyz_offset_scale':opts.gs_xyz_offset_scale,
+                                                                  'scale_bias':opts.gs_scale_bias, 'scale_factor':opts.gs_scale_factor,}
     c.G_kwargs.text_decoder_kwargs = text_decoder_options
     
     ## GS BG Decoder options
     if opts.real_bg:
         bg_decoder_options = {'gen_rgb':opts.bg_gen_rgb, 'gen_sh':opts.bg_gen_sh, 'gen_opacity':opts.bg_gen_opacity, 'gen_scaling':opts.bg_gen_scaling, 'gen_rotation':opts.bg_gen_rotation, 'gen_xyz_offset':opts.bg_gen_xyz_offset,
-                                                                  'max_scaling':opts.bg_max_scaling, 'min_scaling':opts.bg_min_scaling}
+                                                                  'max_scaling':opts.bg_max_scaling, 'min_scaling':opts.bg_min_scaling, 'xyz_offset_scale':opts.bg_xyz_offset_scale,
+                                                                  'scale_bias':opts.bg_scale_bias, 'scale_factor':opts.bg_scale_factor,}
         c.G_kwargs.bg_decoder_kwargs = bg_decoder_options
         c.G_kwargs.bg_resolution = opts.bg_resolution
         c.G_kwargs.bg_depth = opts.bg_depth

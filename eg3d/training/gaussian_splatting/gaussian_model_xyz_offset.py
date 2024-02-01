@@ -184,8 +184,6 @@ class GaussianModel_OffsetXYZ:
     @property
     def get_scaling(self):
         if (self.max_s is not None) or (self.min_s is not None):
-        # if (getattr(self, 'max_s', None) is not None) or (self.min_s is not None):
-            # return torch.clamp(self.scaling_activation(self._scaling), max=self.max_s, min=self.min_s)
             return self.scaling_activation(torch.clamp(self._scaling, max=self.max_s, min=self.min_s))
         
         return self.scaling_activation(self._scaling)

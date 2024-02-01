@@ -747,15 +747,16 @@ class TextureDecoder_allAttributes_noActivations(torch.nn.Module):
         
         self.options = options
         self.out_dim = 3 * options['gen_rgb'] + 3 * options['gen_sh'] + 1 * options['gen_opacity'] + 3 * options['gen_scaling'] + 4 * options['gen_rotation'] + 3 * options['gen_xyz_offset']
-        self.xyz_offset_scale = 6.e-06
+        self.xyz_offset_scale = options['xyz_offset_scale']
         
         self.net = torch.nn.Sequential(
             FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
             torch.nn.Softplus(),
             FullyConnectedLayer(self.hidden_dim, self.out_dim, lr_multiplier=options['decoder_lr_mul'])
         )
-        self.scale_bias = -5
-        self.scale_factor = 1
+        self.scale_bias = options['scale_bias']
+        self.scale_factor = options['scale_factor']
+        print(f"scale_bias: {self.scale_bias}, scale_factor:{self.scale_factor}")
             
     def forward(self, sampled_features):
       
