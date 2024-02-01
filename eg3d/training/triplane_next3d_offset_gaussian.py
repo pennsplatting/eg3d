@@ -141,7 +141,7 @@ class TriPlaneGenerator(torch.nn.Module):
 
         # render gaussians in batch
         self.batch_render = True
-        self.batch_size = 4
+        self.batch_size = 1
         if self.batch_render:
             for i in range(self.batch_size): 
                 setattr(self, f'cam{i}', MiniCam(image_size, image_size, z_near, z_far))
@@ -296,12 +296,12 @@ class TriPlaneGenerator(torch.nn.Module):
         return gaussian_batch
 
 
-    def get_gaussian_attributes(self, gs_i):
-        _xyz = torch.stack([getattr(self, f'g{i}').get_xyz for i in gs_i], axis=0)
-        _opacity = torch.stack([getattr(self, f'g{i}').get_opacity for i in gs_i], axis=0)
-        _scaling = torch.stack([getattr(self, f'g{i}').get_scaling for i in gs_i], axis=0)
-        _rotation = torch.stack([getattr(self, f'g{i}').get_rotation for i in gs_i], axis=0)
-        _features = torch.stack([getattr(self, f'g{i}').get_features for i in gs_i], axis=0)
+    def get_gaussian_attributes(self, gs_batch):
+        _xyz = torch.stack([gs.get_xyz for gs in gs_batch], axis=0)
+        _opacity = torch.stack([gs.get_opacity for gs in gs_batch], axis=0)
+        _scaling = torch.stack([gs.get_scaling for gs in gs_batch], axis=0)
+        _rotation = torch.stack([gs.get_rotation for gs in gs_batch], axis=0)
+        _features = torch.stack([gs.get_features for gs in gs_batch], axis=0)
 
         return {"_xyz":_xyz, "_opacity":_opacity, "_scaling":_scaling, "_rotation":_rotation, "_features":_features, "active_sh_degree":self.sh_degree}
     
@@ -309,7 +309,7 @@ class TriPlaneGenerator(torch.nn.Module):
         camlist = []
         for i in range(self.batch_size):
             cam = getattr(self, f'cam{i}')
-            cam.update_transforms2(intrinsics[i], cam2world_matrix[i])
+            cam.update_transforms_batch(intrinsics[i], cam2world_matrix[i])
             camlist.append(cam)
         return camlist
 
@@ -508,7 +508,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 if self.decode_before_gridsample:
                 # decode before grid sample
                     textures_gen_batch = self.text_decoder(planes) # (4, 96, 256, 256) -> (4, SH, 256, 256), range [0,1]
-                    textures_gen_batch = F.grid_sample(textures_gen_batch, self.raw_uvcoords.unsqueeze(1).repeat(4,1,1,1), align_corners=False) # (B, C, 1, N_pts)
+                    textures_gen_batch = F.grid_sample(textures_gen_batch, self.raw_uvcoords.unsqueeze(1).repeat(self.batch_size,1,1,1), align_corners=False) # (B, C, 1, N_pts)
                 else: # decode after grid sample
                     pass
                     st() #TODO: add decode before grid sample
@@ -583,7 +583,7 @@ class TriPlaneGenerator(torch.nn.Module):
                         else:
                             gs_batch[i].update_textures(textures)
                 
-                current_gaussian = self.get_gaussian_attributes(gs_i)
+                current_gaussian = self.get_gaussian_attributes(gs_batch)
                 res = batch_render(cam_list, current_gaussian, None, self.background, override_color=override_color)
                 
                 rgb_image = res["render"]

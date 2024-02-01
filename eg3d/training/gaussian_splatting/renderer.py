@@ -176,7 +176,7 @@ def batch_render(viewpoint_camera_list, pc, pipe, bg_color : torch.Tensor,
         campos=camera_center_list,
         prefiltered=False,
         gaussian_batched=True,
-        debug=None
+        debug=False
     )
 
     batch_rasterizer = BatchGaussianRasterizer(raster_settings=raster_settings)
