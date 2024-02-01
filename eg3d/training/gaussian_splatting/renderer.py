@@ -218,14 +218,14 @@ def batch_render(viewpoint_camera_list, pc, pipe, bg_color : torch.Tensor,
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
 
-    # print("(means2D)", means2D.shape, means2D.device)
-    # print("(means3D)", means3D.shape, means3D.device)
-    # # print("(shs)", shs.shape, shs.device)
+    print("(means2D)", means2D, means2D.shape, means2D.device)
+    print("(means3D)", means3D, means3D.shape, means3D.device)
+    print("(shs)", shs, shs.shape, shs.device)
     # print("(colors_precomp)", colors_precomp.shape, colors_precomp.device)
-    # print("(opacity)", opacity.shape, opacity.device)
-    # print("(scales)", scales.shape, scales.device)
-    # print("(rotations)", rotations.shape, rotations.device)
-    # # print("(cov3D_precomp)", cov3D_precomp.shape, cov3D_precomp.device)
+    print("(opacity)", opacity, opacity.shape, opacity.device)
+    print("(scales)", scales, scales.shape, scales.device)
+    print("(rotations)", rotations, rotations.shape, rotations.device)
+    # print("(cov3D_precomp)", cov3D_precomp.shape, cov3D_precomp.device)
 
     rendered_image, radii = batch_rasterizer(
         means3D = means3D,
