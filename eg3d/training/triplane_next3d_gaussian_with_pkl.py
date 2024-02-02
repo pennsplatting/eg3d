@@ -242,7 +242,8 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 # normalize to eg3d space
                 vertices = (vertices - vertices.mean(dim=0)) * scale_factor + target_mean
-                setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(vertices), i))
+                # setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(vertices), i))
+                setattr(self, f'v{i}', copy.deepcopy(vertices))
             self.plane_axes_gs = generate_planes().to(self.verts.device)
             
         
@@ -255,9 +256,10 @@ class TriPlaneGenerator(torch.nn.Module):
         # bg gaussian
         self.bg_resolution = bg_resolution
         bg_verts = torch.rand([self.bg_resolution * self.bg_resolution, 3]).to(self.verts.device) - 0.5
+        self.bg_verts = bg_verts
         self.bg_depth = bg_depth
         
-        self.bg_gaussian = GaussianModel_BG(self.sh_degree, bg_verts)
+        # self.bg_gaussian = GaussianModel_BG(self.sh_degree, bg_verts)
         uv_size = (self.bg_resolution, self.bg_resolution)
         self.bg_uvcoord = self.create_uniform_uv_coordinates(uv_size).to(device='cuda') # in range [-1,1]
         # print(self.bg_uvcoord)
@@ -318,13 +320,13 @@ class TriPlaneGenerator(torch.nn.Module):
             # Add other boolean attributes here
             "gaussian_splatting_use_sr": self.gaussian_splatting_use_sr,
             "use_colors_precomp": self.use_colors_precomp,
-            "sh_degree(start)": self.g1.active_sh_degree,
+            # "sh_degree(start)": self.g1.active_sh_degree,
             "sh_degree(max)": self.sh_degree,
-            "update interval": self.g1.update_interval,
+            # "update interval": self.g1.update_interval,
             "num_gaussians": self.num_gaussians,
             "gassian render background": 'white' if self.white_background else 'black',
             "gaussian bank init": 'same' if self.init_from_the_same_canonical else f'different_{self.num_gaussians}',
-            "gaussian_model": self.g1.__class__.__name__,
+            # "gaussian_model": self.g1.__class__.__name__,
             # Add more attributes as needed
             "feature_structure": self.feature_structure,
             "texture_decoder": self.text_decoder.__class__.__name__,
@@ -340,7 +342,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # For adding BG
             'backbone output planes_channels(All)': self.planes_channels,
             'backbone output planes_channels(Background)': self.planes_channels_bg,
-            "bg_gaussian": self.bg_gaussian.__class__.__name__,
+            # "bg_gaussian": self.bg_gaussian.__class__.__name__,
             "bg_resolution": self.bg_resolution, 
             "bg_depth": self.bg_depth,
             "bg_decoder output attriutes": getattr(self.bg_decoder, 'options', None),
@@ -368,6 +370,11 @@ class TriPlaneGenerator(torch.nn.Module):
         gs_i = random.randint(1, self.num_gaussians) # upper bound is included
         # print(gs_i)
         return getattr(self, f'g{gs_i}')
+    
+    def get_a_gaussian_verts(self):
+        gs_i = random.randint(1, self.num_gaussians) # upper bound is included
+        # print(gs_i)
+        return getattr(self, f'v{gs_i}')
         
     
     def process_uv_with_res(self, uv_coords, uv_h = 256, uv_w = 256):
@@ -575,6 +582,8 @@ class TriPlaneGenerator(torch.nn.Module):
 
             rgb_image_batch = []
             alpha_image_batch = [] # mask
+
+            bg_gaussian = GaussianModel_BG(self.sh_degree, self.bg_verts)
             
             
             real_image_batch = []
@@ -584,7 +593,10 @@ class TriPlaneGenerator(torch.nn.Module):
             ## TODO: can gaussiam splatting run batch in parallel?
             for _gs_i, _cam2world_matrix, _intrinsics, textures_gen, bg_gen in zip(range(len(textures_gen_batch)), cam2world_matrix, intrinsics, textures_gen_batch, bg_gen_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
                 # randomly select a new gaussian for each rendering
-                current_gaussian = self.get_a_gaussian()
+                # current_gaussian = self.get_a_gaussian()
+                current_gaussian_verts = self.get_a_gaussian_verts()
+                current_gaussian = GaussianModel(self.sh_degree, copy.deepcopy(current_gaussian_verts))
+                
                 self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
                 
                 # update bg gaussian
@@ -596,26 +608,31 @@ class TriPlaneGenerator(torch.nn.Module):
                 if self.bg_decoder.options['gen_rgb']:
                     _rgb = textures[0,start_dim:start_dim+3,0].permute(1,0)
                     start_dim += 3
-                    self.bg_gaussian.update_rgb_textures(_rgb)
+                    # self.bg_gaussian.update_rgb_textures(_rgb)
+                    bg_gaussian.update_rgb_textures(_rgb)
                 
                 if self.bg_decoder.options['gen_sh']:
                     _sh = textures[0,start_dim:start_dim+3,0].permute(1,0)
                     start_dim += 3
-                    self.bg_gaussian.update_sh_texture(_sh)
+                    # self.bg_gaussian.update_sh_texture(_sh)
+                    bg_gaussian.update_sh_texture(_sh)
                 
                 if self.bg_decoder.options['gen_opacity']:
                     _opacity = textures[0,start_dim:start_dim+1,0].permute(1,0) # should be no adjustment for sigmoid
                     start_dim += 1
-                    self.bg_gaussian.update_opacity(_opacity)
+                    # self.bg_gaussian.update_opacity(_opacity)
+                    bg_gaussian.update_opacity(_opacity)
                 
                 if self.bg_decoder.options['gen_scaling']:
                     _scaling = textures[0,start_dim:start_dim+3,0].permute(1,0)
-                    self.bg_gaussian.update_scaling(_scaling, max_s = self.bg_decoder.options['max_scaling'], min_s = self.bg_decoder.options['min_scaling'])
+                    # self.bg_gaussian.update_scaling(_scaling, max_s = self.bg_decoder.options['max_scaling'], min_s = self.bg_decoder.options['min_scaling'])
+                    bg_gaussian.update_scaling(_scaling, max_s = self.bg_decoder.options['max_scaling'], min_s = self.bg_decoder.options['min_scaling'])
                     start_dim += 3
                     
                 if self.bg_decoder.options['gen_rotation']:
                     _rotation = textures[0,start_dim:start_dim+4,0].permute(1,0)
-                    self.bg_gaussian.update_rotation(_rotation)
+                    # self.bg_gaussian.update_rotation(_rotation)
+                    bg_gaussian.update_rotation(_rotation)
                     start_dim += 4
                 
                 ## update bg gaussian _xyz according to c2w
@@ -631,7 +648,8 @@ class TriPlaneGenerator(torch.nn.Module):
                     bg_xyz += _xyz_offset
                     start_dim += 3
                     
-                self.bg_gaussian.update_xyz(bg_xyz)
+                # self.bg_gaussian.update_xyz(bg_xyz)
+                bg_gaussian.update_xyz(bg_xyz)
             
                 assert start_dim==textures.shape[1]
                 
@@ -696,13 +714,15 @@ class TriPlaneGenerator(torch.nn.Module):
                 if gs_fname_batch is not None and _gs_i==0:
                     gs_fname = f'{gs_fname_batch}_{_gs_i:02d}.ply'
                     # combine bg_gaussian and current gaussian
-                    current_gaussian_with_bg = combine_list_of_gs([current_gaussian, self.bg_gaussian])
+                    # current_gaussian_with_bg = combine_list_of_gs([current_gaussian, self.bg_gaussian])
+                    current_gaussian_with_bg = combine_list_of_gs([current_gaussian, bg_gaussian])
                     current_gaussian_with_bg.save_ply(gs_fname)
                     
                 
                 # res = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
                 # res = gs_render(self.viewpoint_camera, self.bg_gaussian, None, self.background, override_color=override_color)
-                res = gs_render_with_bg(self.viewpoint_camera, [current_gaussian, self.bg_gaussian], None, self.background, override_color=override_color)
+                # res = gs_render_with_bg(self.viewpoint_camera, [current_gaussian, self.bg_gaussian], None, self.background, override_color=override_color)
+                res = gs_render_with_bg(self.viewpoint_camera, [current_gaussian, bg_gaussian], None, self.background, override_color=override_color)
                 
                 _rgb_image = res["render"]
                 _alpha_image = 1 - res["alpha"]

@@ -360,10 +360,10 @@ def training_loop(
         {'G':G.record_attributes_to_json()}
         )
     
-    # append gaussian's attributes
-    existing_data.update(
-        {'gaussian optimizer':get_optimizer_parameters(G.g1.optimizer)}
-        )
+    # # append gaussian's attributes
+    # existing_data.update(
+    #     {'gaussian optimizer':get_optimizer_parameters(G.g1.optimizer)}
+    #     )
     
     existing_data.update(
         {'optimize_gaussians in training_loop':optimize_gaussians}
@@ -685,10 +685,9 @@ def training_loop(
             images = torch.cat([o['image'].cpu() for o in out]).detach().numpy()
             images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
             images_mask = torch.cat([o['image_mask'].cpu() for o in out]).detach().numpy()
-            images_real = torch.cat([o['image_real'].cpu() for o in out]).detach().numpy() # FIXME: init with gt texture for debug
-            # save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
+            # images_real = torch.cat([o['image_real'].cpu() for o in out]).detach().numpy() # FIXME: init with gt texture for debug
+
             rgb_drange = [-1,1] if G_ema.normalize_rgb_image else [0,1]
-            
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=rgb_drange, grid_size=grid_size)
             save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=rgb_drange, grid_size=grid_size)
             save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[0, 1], grid_size=grid_size)
@@ -698,7 +697,7 @@ def training_loop(
             
             # save ply and see if the texture is well optimized
             # if not os.path.exists(os.path.join(run_dir, "./gt_3dmm.ply")):
-            G_ema.gaussian_debug.save_ply(os.path.join(run_dir, "./gt_3dmm.ply"), save_override_color)
+            # G_ema.gaussian_debug.save_ply(os.path.join(run_dir, "./gt_3dmm.ply"), save_override_color)
             
             print(f"total updated gaussians:{phases_updated_gaussians}")
             
@@ -753,7 +752,7 @@ def training_loop(
                         misc.check_ddp_consistency(module, ignore_regex=r'.*\.[^.]+_(avg|ema)')
                     # module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
                     # module = module.detach().clone().eval().requires_grad_(False).cpu()
-                    # print(f"copying module {name}")
+                    print(f"copying module {name}")
                     # st()
                     module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
                 snapshot_data[name] = module

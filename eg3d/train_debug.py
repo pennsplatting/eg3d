@@ -319,7 +319,8 @@ def main(**kwargs):
         if opts.template_model=='FLAME':
             c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_FLAME.TriPlaneGenerator'
         else:
-            c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_bg.TriPlaneGenerator'
+            # c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_bg.TriPlaneGenerator'
+            c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_pkl.TriPlaneGenerator'
     print('c.G_kwargs.class_name:', c.G_kwargs.class_name)
     ## D
     if not opts.use_mask_condition:
