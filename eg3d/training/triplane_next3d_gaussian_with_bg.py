@@ -74,6 +74,53 @@ def print_grad(name, grad):
         return 
     # print(grad)
     print('\t',grad.max(), grad.min(), grad.mean())
+
+def combine_list_of_gs(pc_list: [GaussianModel]):
+    # get the attr of each gs
+    pc_sh = set([_pc.active_sh_degree for _pc in pc_list])
+    assert len(pc_sh) == 1
+    pc_active_sh_degree = pc_sh.pop()
+    
+    pc_xyz = torch.cat([_pc.get_xyz for _pc in pc_list], dim=0)
+    pc_features = torch.cat([_pc.get_features for _pc in pc_list], dim=0)
+    pc_opacity = torch.cat([_pc.get_opacity for _pc in pc_list], dim=0)
+    pc_scaling = torch.cat([_pc.get_scaling for _pc in pc_list], dim=0)
+    pc_rotation = torch.cat([_pc.get_rotation for _pc in pc_list], dim=0)
+    
+    # create a new gs with combined attr
+    combined_gs = GaussianModel(pc_active_sh_degree, copy.deepcopy(pc_xyz))
+    
+    # TODO: change the shape of features
+    combined_gs.update_sh_texture_combine(pc_features)
+    
+    # to update gaussian bank
+    # def 
+    #     V, C = feature_uv.shape # (1, 48, 1, 5023)
+    #     features = feature_uv.reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
+       
+    #     self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True) # [V, 1, 3]
+    #     self._features_rest = features[:,:,1:].transpose(1, 2).contiguous()#.requires_grad_(True)# [V, sh degree - 1, 3]
+    combined_gs.update_opacity(pc_opacity)
+    # def update_opacity(self, opacity):
+    #     self._opacity = opacity
+
+    combined_gs.update_scaling(pc_scaling)
+    # def update_scaling(self, scaling, max_s=None, min_s=None):  
+    #     # clamp settings
+    #     self.max_s = max_s
+    #     self.min_s = min_s
+        
+    #     # update
+    #     self._scaling = scaling
+    
+    combined_gs.update_rotation(pc_rotation)
+    # def update_rotation(self, rotation):
+    #     self._rotation = rotation
+    
+    return combined_gs
+    
+
+    
     
 @persistence.persistent_class
 class TriPlaneGenerator(torch.nn.Module):
@@ -453,7 +500,7 @@ class TriPlaneGenerator(torch.nn.Module):
         return w2c
     
             
-    def synthesis(self, ws, c, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):
+    def synthesis(self, ws, c, gs_fname_batch=None, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):
         # real_img = self.gt_uv_map(c)
         
         cam2world_matrix = c[:, :16].view(-1, 4, 4)
@@ -531,10 +578,11 @@ class TriPlaneGenerator(torch.nn.Module):
             
             
             real_image_batch = []
-           
+
+            # to save ply during G_ema eval
             _xyz_offset = None
             ## TODO: can gaussiam splatting run batch in parallel?
-            for _cam2world_matrix, _intrinsics, textures_gen, bg_gen in zip(cam2world_matrix, intrinsics, textures_gen_batch, bg_gen_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
+            for _gs_i, _cam2world_matrix, _intrinsics, textures_gen, bg_gen in zip(range(len(textures_gen_batch)), cam2world_matrix, intrinsics, textures_gen_batch, bg_gen_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
                 # randomly select a new gaussian for each rendering
                 current_gaussian = self.get_a_gaussian()
                 self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
@@ -638,11 +686,19 @@ class TriPlaneGenerator(torch.nn.Module):
                             current_gaussian.update_xyz_offset(_xyz_offset)
                             start_dim += 3
                             
-                    
                         assert start_dim==textures.shape[1]
+                        
                         
                     else:
                         current_gaussian.update_textures(textures)
+                
+                # save gs ply during G_ema eval
+                if gs_fname_batch is not None and _gs_i==0:
+                    gs_fname = f'{gs_fname_batch}_{_gs_i:02d}.ply'
+                    # combine bg_gaussian and current gaussian
+                    current_gaussian_with_bg = combine_list_of_gs([current_gaussian, self.bg_gaussian])
+                    current_gaussian_with_bg.save_ply(gs_fname)
+                    
                 
                 # res = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
                 # res = gs_render(self.viewpoint_camera, self.bg_gaussian, None, self.background, override_color=override_color)

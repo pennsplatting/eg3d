@@ -59,6 +59,7 @@ def print_grad(name, grad):
         return 
     # print(grad)
     print('\t',grad.max(), grad.min(), grad.mean())
+
     
 class GaussianModel_OffsetXYZ:
 
@@ -334,9 +335,19 @@ class GaussianModel_OffsetXYZ:
         # self._opacity.register_hook(lambda grad: print_grad("------_opacity.requires_grad", grad))
     
     # to update gaussian bank
+    def update_sh_texture_combine(self, feature_uv):
+        V, _sh, C  = feature_uv.shape
+        assert C==3
+        features = feature_uv
+       
+        self._features_dc = features[:,:1].transpose(1, 2).contiguous()#.requires_grad_(True) # [V, 1, 3]
+        self._features_rest = features[:,1:].transpose(1, 2).contiguous()#.requires_grad_(True)# [V, sh degree - 1, 3]
+        
+    
+    # to update gaussian bank
     def update_sh_texture(self, feature_uv):
-        V, C = feature_uv.shape # (1, 48, 1, 5023)
-        features = feature_uv.reshape(V,3,C//3).contiguous() # [5023, 3, 16] [V, 3, C']
+        V, C = feature_uv.shape 
+        features = feature_uv.reshape(V,3,C//3).contiguous() # [V, 3, C']
        
         self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True) # [V, 1, 3]
         self._features_rest = features[:,:,1:].transpose(1, 2).contiguous()#.requires_grad_(True)# [V, sh degree - 1, 3]

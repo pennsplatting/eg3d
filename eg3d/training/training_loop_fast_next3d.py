@@ -256,6 +256,7 @@ def training_loop(
     cudnn_benchmark         = True,     # Enable torch.backends.cudnn.benchmark?
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
+    save_gaussian_ply       = False,    # Save the gaussian model during G_ema evaluation.
 ):
     # Initialize.
     start_time = time.time()
@@ -674,8 +675,13 @@ def training_loop(
 
         # Save image snapshot.
         print(f"image_snapshot_ticks is {image_snapshot_ticks}")
-        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
-            out = [G_ema(z=z, c=c, noise_mode='const') for z, c in zip(grid_z, grid_c)]
+        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0): 
+            if not save_gaussian_ply:
+                out = [G_ema(z=z, c=c, noise_mode='const', ) for z, c in zip(grid_z, grid_c)] # len(grid_z)=30
+            else:
+                # pass in the argument of file names to save gs
+                
+                out = [G_ema(z=z, c=c, noise_mode='const', gs_fname_batch=os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_{i:03d}')) for i, (z, c) in enumerate(zip(grid_z, grid_c))] # len(grid_z)=30, but each is a batch of 4. Total=120.
             images = torch.cat([o['image'].cpu() for o in out]).detach().numpy()
             images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
             images_mask = torch.cat([o['image_mask'].cpu() for o in out]).detach().numpy()
@@ -686,7 +692,7 @@ def training_loop(
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=rgb_drange, grid_size=grid_size)
             save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=rgb_drange, grid_size=grid_size)
             save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[0, 1], grid_size=grid_size)
-            save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[0,1], grid_size=grid_size)
+            # save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[0,1], grid_size=grid_size)
             
             save_override_color = getattr(G_ema, 'use_colors_precomp')
             
@@ -738,24 +744,24 @@ def training_loop(
         snapshot_pkl = None
         snapshot_data = None
 
-        # ## TODO: recover this save snapshot
-        # if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
-        #     snapshot_data = dict(training_set_kwargs=dict(training_set_kwargs))
-        #     for name, module in [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]:
-        #         if module is not None:
-        #             if num_gpus > 1:
-        #                 misc.check_ddp_consistency(module, ignore_regex=r'.*\.[^.]+_(avg|ema)')
-        #             module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
-        #             # module = module.detach().clone().eval().requires_grad_(False).cpu()
-        #             # print(f"copying module {name}")
-        #             # st()
-        #             # module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
-        #         snapshot_data[name] = module
-        #         del module # conserve memory
-        #     snapshot_pkl = os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl')
-        #     if rank == 0:
-        #         with open(snapshot_pkl, 'wb') as f:
-        #             pickle.dump(snapshot_data, f)
+        ## TODO: recover this save snapshot
+        if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
+            snapshot_data = dict(training_set_kwargs=dict(training_set_kwargs))
+            for name, module in [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]:
+                if module is not None:
+                    if num_gpus > 1:
+                        misc.check_ddp_consistency(module, ignore_regex=r'.*\.[^.]+_(avg|ema)')
+                    # module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
+                    # module = module.detach().clone().eval().requires_grad_(False).cpu()
+                    # print(f"copying module {name}")
+                    # st()
+                    module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
+                snapshot_data[name] = module
+                del module # conserve memory
+            snapshot_pkl = os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl')
+            if rank == 0:
+                with open(snapshot_pkl, 'wb') as f:
+                    pickle.dump(snapshot_data, f)
 
         # # Evaluate metrics.
         # if (snapshot_data is not None) and (len(metrics) > 0):

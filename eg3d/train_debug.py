@@ -214,6 +214,7 @@ def parse_comma_separated_list(s):
 # GS bank
 @click.option('--num_gaussians', help='Number of gaussian models in the gaussian bank', metavar='INT', type=click.IntRange(min=1), default=500, required=False, show_default=True)
 @click.option('--optimize_gaussians', help='Optimize gaussian attributes of gaussian models in generator', metavar='BOOL',  type=bool, required=False, default=False)
+@click.option('--template_model', help='Type of template model as canonical geometry', metavar='STR',  type=click.Choice(['3DMM', 'FLAME']), required=False, default='3DMM')
 
 # GS bg
 @click.option('--real_bg', help='Enable real background generation in generator', metavar='BOOL',  type=bool, required=False, default=False)
@@ -231,6 +232,9 @@ def parse_comma_separated_list(s):
 @click.option('--bg_scale_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
 @click.option('--bg_resolution', help='Resolution of num gaussians used to render bg', metavar='INT', type=click.IntRange(min=1), default=128, required=False, show_default=True)
 @click.option('--bg_depth', help='How many (ray_origin + ray_dir * bg_depth) is used to control the distance of bg gaussian to image plane', metavar='INT', type=click.IntRange(min=1), default=5, required=False, show_default=True)
+# GS save viz
+@click.option('--save_gaussian_ply', help='Enable gaussian ply saving during image saving ticks', metavar='BOOL',  type=bool, required=False, default=True)
+
 
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
@@ -312,7 +316,10 @@ def main(**kwargs):
     # c.G_kwargs.class_name = 'training.triplane_next3d_multiple_gaussian.TriPlaneGenerator'
     c.G_kwargs.class_name = 'training.triplane_next3d_offset_gaussian.TriPlaneGenerator'
     if opts.real_bg:
-        c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_bg.TriPlaneGenerator'
+        if opts.template_model=='FLAME':
+            c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_FLAME.TriPlaneGenerator'
+        else:
+            c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_bg.TriPlaneGenerator'
     print('c.G_kwargs.class_name:', c.G_kwargs.class_name)
     ## D
     if not opts.use_mask_condition:
@@ -346,6 +353,9 @@ def main(**kwargs):
     c.G_kwargs.num_gaussians = opts.num_gaussians   
     c.G_kwargs.optimize_gaussians = opts.optimize_gaussians
     c.G_kwargs.no_activation_in_decoder = opts.no_activation_in_decoder
+
+    ## GS save ply in G_ema 
+    c.save_gaussian_ply = opts.save_gaussian_ply
         
     c.loss_kwargs.filter_mode = 'antialiased' # Filter mode for raw images ['antialiased', 'none', float [0-1]]
     c.D_kwargs.disc_c_noise = opts.disc_c_noise # Regularization for discriminator pose conditioning
