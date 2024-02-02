@@ -77,7 +77,6 @@ class StyleGAN2Loss(Loss):
         blur_size = np.floor(blur_sigma * 3)
         # if blur_size > 0:
         if blur_size > 0 and self.dual_discrimination:
-            st()
             with torch.autograd.profiler.record_function('blur'):
                 f = torch.arange(-blur_size, blur_size + 1, device=img['image'].device).div(blur_sigma).square().neg().exp2()
                 img['image'] = upfirdn2d.filter2d(img['image'], f / f.sum())

@@ -678,8 +678,7 @@ def training_loop(
 
         # Save image snapshot.
         print(f"image_snapshot_ticks is {image_snapshot_ticks}")
-        # if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0): 
-        if True:
+        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             if not save_gaussian_ply:
                 out = [G_ema(z=z, c=c, noise_mode='const') for z, c in zip(grid_z, grid_c)] # len(grid_z)=30
             else:
