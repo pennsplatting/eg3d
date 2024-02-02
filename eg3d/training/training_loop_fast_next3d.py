@@ -678,12 +678,13 @@ def training_loop(
 
         # Save image snapshot.
         print(f"image_snapshot_ticks is {image_snapshot_ticks}")
-        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0): 
+        # if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0): 
+        if True:
             if not save_gaussian_ply:
                 out = [G_ema(z=z, c=c, noise_mode='const') for z, c in zip(grid_z, grid_c)] # len(grid_z)=30
             else:
                 # pass in the argument of file names to save gs
-                out = [G_ema(z=z, c=c, noise_mode='const', gs_fname_batch=os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_{i:03d}')) for i, (z, c) in enumerate(zip(grid_z, grid_c))] # len(grid_z)=30, but each is a batch of 4. Total=120.
+                out = [G_ema(z=z, c=c, noise_mode='const', gs_fname_batch=os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}/b{i:03d}')) for i, (z, c) in enumerate(zip(grid_z, grid_c))] # len(grid_z)=30, but each is a batch of 4. Total=120.
             
             images = torch.cat([o['image'].cpu() for o in out]).detach().numpy()
             # images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
