@@ -135,6 +135,7 @@ class TriPlaneGenerator(torch.nn.Module):
         no_activation_in_decoder,
         bg_resolution, 
         bg_depth,
+        low_res_training,
         sh_degree           = 3,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         text_decoder_kwargs = {},   # GS TextureDecoder
@@ -184,16 +185,24 @@ class TriPlaneGenerator(torch.nn.Module):
     
         # initialize camera and gaussians
         
+        z_near, z_far = 0.1, 2 # TODO: find suitable value for this
+        
         ## gaussian_splatting rendering resolution: 
         ## V1: gaussian rendering -> 64 x 64 -> sr module --> 256 x 256: self.gaussian_splatting_use_sr = True
         ## v2: gausian rendering -> 256 x 256 : self.gaussian_splatting_use_sr = False
-        if self.gaussian_splatting_use_sr:
-            image_size = self.neural_rendering_resolution # check
+        # res
+        self.low_res_training = low_res_training
+
+        if self.low_res_training:
+            image_size = self.neural_rendering_resolution
         else:
-            image_size = 512
-        z_near, z_far = 0.1, 2 # TODO: find suitable value for this
+            if self.gaussian_splatting_use_sr:
+                image_size = self.neural_rendering_resolution # check
+            else:
+                image_size = 512
         
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
+        self.image_size = image_size # for recording only
         
         # create a bank of gaussian models
         self.num_gaussians = num_gaussians
@@ -211,7 +220,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.alpha_option = 'alpha'
         assert self.alpha_option in ['alpha', 'silhouette']
         self.normalize_rgb_image = True
-
+        
         # load reduced index for front face only model
         self.keep_only_front_face_UV()
 
@@ -229,7 +238,8 @@ class TriPlaneGenerator(torch.nn.Module):
             target_mean = self.verts.mean(dim=0)
             
             scale_factor = 1 / 3.4 # observed by the scale difference: eg3d = scale_factor * 3dmm
-            obj_folder = '/home/ritz/eg3d/eg3d/data/gaussian_bank/front_face_gaussian_1k/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/checkpoints/pretrained/results/00000_1k_no_rotation/epoch_20_000000'
+            # obj_folder = '/home/ritz/eg3d/eg3d/data/gaussian_bank/front_face_gaussian_1k/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/checkpoints/pretrained/results/00000_1k_no_rotation/epoch_20_000000'
+            obj_folder = '/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/checkpoints/pretrained/results/00000_1k_no_rotation/epoch_20_000000'
             obj_paths = [os.path.join(obj_folder, i) for i in sorted(os.listdir(obj_folder)) if i.endswith('obj')]
             total_different = len(obj_paths)
             
@@ -301,7 +311,8 @@ class TriPlaneGenerator(torch.nn.Module):
             
             
     def keep_only_front_face_UV(self):
-        bfm_folder = '/home/ritz/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/BFM'
+        # bfm_folder = '/home/ritz/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/BFM'
+        bfm_folder = '/home/xuyimeng/Repo/eg3d/dataset_preprocessing/ffhq/Deep3DFaceRecon_pytorch/BFM'
         index_exp = loadmat(osp.join(bfm_folder, 'BFM_front_idx.mat'))
         index_exp = index_exp['idx'].astype(np.int32) - 1  # starts from 0 (to 53215)
         
@@ -339,6 +350,8 @@ class TriPlaneGenerator(torch.nn.Module):
             # Rendering 
             "alpha or silhouettes": self.alpha_option,
             "normalize rendered rgb_image": self.normalize_rgb_image,
+            "low_res_training": self.low_res_training,
+            "gs rendered image_size": self.image_size,
             # For adding BG
             'backbone output planes_channels(All)': self.planes_channels,
             'backbone output planes_channels(Background)': self.planes_channels_bg,
@@ -747,7 +760,10 @@ class TriPlaneGenerator(torch.nn.Module):
             
             ## TODO: the below superresolution shall be kept?
             ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?
-            if self.gaussian_splatting_use_sr:
+            if self.low_res_training:
+                sr_image = rgb_image
+                rgb_image = None
+            elif self.gaussian_splatting_use_sr:
                 sr_image = self.superresolution(rgb_image, textures_gen_batch, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
             else:
                 sr_image = rgb_image

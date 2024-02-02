@@ -73,8 +73,11 @@ class StyleGAN2Loss(Loss):
         return gen_output, ws
 
     def run_D(self, img, c, blur_sigma=0, blur_sigma_raw=0, update_emas=False):
+     
         blur_size = np.floor(blur_sigma * 3)
-        if blur_size > 0:
+        # if blur_size > 0:
+        if blur_size > 0 and self.dual_discrimination:
+            st()
             with torch.autograd.profiler.record_function('blur'):
                 f = torch.arange(-blur_size, blur_size + 1, device=img['image'].device).div(blur_sigma).square().neg().exp2()
                 img['image'] = upfirdn2d.filter2d(img['image'], f / f.sum())
@@ -88,6 +91,7 @@ class StyleGAN2Loss(Loss):
 
         logits = self.D(img, c, update_emas=update_emas)
         return logits
+    
 
     # TODO: L2 loss for debug
     def accumulate_gradients_debug(self, phase, real_img, real_c, gen_z, gen_c, gain, cur_nimg):
@@ -145,7 +149,8 @@ class StyleGAN2Loss(Loss):
             neural_rendering_resolution = self.neural_rendering_resolution_initial
 
         real_img_raw = filtered_resizing(real_img, size=neural_rendering_resolution, f=self.resample_filter, filter_mode=self.filter_mode)
-        # torch.Size([4, 3, 512, 512])
+        # raw: torch.Size([4, 3, 64, 64]), real_img: 512x512
+
         
         if self.blur_raw_target:
             blur_size = np.floor(blur_sigma * 3)
@@ -310,10 +315,13 @@ class StyleGAN2Loss(Loss):
         if phase in ['Dmain', 'Dreg', 'Dboth']:
             name = 'Dreal' if phase == 'Dmain' else 'Dr1' if phase == 'Dreg' else 'Dreal_Dr1'
             with torch.autograd.profiler.record_function(name + '_forward'):
+                
                 real_img_tmp_image = real_img['image'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
                 real_img_tmp_image_raw = real_img['image_raw'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
-                real_img_tmp = {'image': real_img_tmp_image, 'image_raw': real_img_tmp_image_raw}
-
+                if self.dual_discrimination:
+                    real_img_tmp = {'image': real_img_tmp_image, 'image_raw': real_img_tmp_image_raw}
+                else:
+                    real_img_tmp = {'image': real_img_tmp_image_raw, 'image_raw': None}
                 real_logits = self.run_D(real_img_tmp, real_c, blur_sigma=blur_sigma)
                 training_stats.report('Loss/scores/real', real_logits)
                 training_stats.report('Loss/signs/real', real_logits.sign())

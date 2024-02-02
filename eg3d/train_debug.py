@@ -234,6 +234,9 @@ def parse_comma_separated_list(s):
 @click.option('--bg_depth', help='How many (ray_origin + ray_dir * bg_depth) is used to control the distance of bg gaussian to image plane', metavar='INT', type=click.IntRange(min=1), default=5, required=False, show_default=True)
 # GS save viz
 @click.option('--save_gaussian_ply', help='Enable gaussian ply saving during image saving ticks', metavar='BOOL',  type=bool, required=False, default=True)
+# GS rendering resolution during training
+@click.option('--low_res_training', help='Enable low_res gaussian rendering during training', metavar='BOOL',  type=bool, required=False, default=False)
+
 
 
 def main(**kwargs):
@@ -323,7 +326,9 @@ def main(**kwargs):
             c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_pkl.TriPlaneGenerator'
     print('c.G_kwargs.class_name:', c.G_kwargs.class_name)
     ## D
-    if not opts.use_mask_condition:
+    if opts.low_res_training:
+        c.D_kwargs.class_name = 'training.dual_discriminator.SingleDiscriminator'
+    elif not opts.use_mask_condition:
         c.D_kwargs.class_name = 'training.dual_discriminator.DualDiscriminator'
     else:
         c.D_kwargs.class_name = 'training.dual_discriminator_mask_condition.DualDiscriminator'
@@ -354,12 +359,15 @@ def main(**kwargs):
     c.G_kwargs.num_gaussians = opts.num_gaussians   
     c.G_kwargs.optimize_gaussians = opts.optimize_gaussians
     c.G_kwargs.no_activation_in_decoder = opts.no_activation_in_decoder
+    ## GS rendering
+    c.G_kwargs.low_res_training = opts.low_res_training
 
     ## GS save ply in G_ema 
     c.save_gaussian_ply = opts.save_gaussian_ply
         
     c.loss_kwargs.filter_mode = 'antialiased' # Filter mode for raw images ['antialiased', 'none', float [0-1]]
-    c.D_kwargs.disc_c_noise = opts.disc_c_noise # Regularization for discriminator pose conditioning
+    if not opts.low_res_training:
+        c.D_kwargs.disc_c_noise = opts.disc_c_noise # Regularization for discriminator pose conditioning
 
     if c.training_set_kwargs.resolution == 512:
         sr_module = 'training.superresolution.SuperresolutionHybrid8XDC'
@@ -434,7 +442,8 @@ def main(**kwargs):
 
     c.loss_kwargs.gpc_reg_prob = opts.gpc_reg_prob if opts.gen_pose_cond else None
     c.loss_kwargs.gpc_reg_fade_kimg = opts.gpc_reg_fade_kimg
-    c.loss_kwargs.dual_discrimination = True
+    # c.loss_kwargs.dual_discrimination = True
+    c.loss_kwargs.dual_discrimination = not (c.G_kwargs.low_res_training)
     c.loss_kwargs.neural_rendering_resolution_initial = opts.neural_rendering_resolution_initial
     c.loss_kwargs.neural_rendering_resolution_final = opts.neural_rendering_resolution_final
     c.loss_kwargs.neural_rendering_resolution_fade_kimg = opts.neural_rendering_resolution_fade_kimg
