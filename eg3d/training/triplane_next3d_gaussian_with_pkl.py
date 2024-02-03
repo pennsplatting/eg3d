@@ -132,6 +132,7 @@ class TriPlaneGenerator(torch.nn.Module):
         img_channels,               # Number of output color channels.
         num_gaussians,              # Number of gaussian bases in the bank.
         optimize_gaussians, 
+        init_from_the_same_canonical, 
         no_activation_in_decoder,
         bg_resolution, 
         bg_depth,
@@ -195,6 +196,7 @@ class TriPlaneGenerator(torch.nn.Module):
 
         if self.low_res_training:
             image_size = self.neural_rendering_resolution
+            bg_resolution = min(bg_resolution, image_size)
         else:
             if self.gaussian_splatting_use_sr:
                 image_size = self.neural_rendering_resolution # check
@@ -603,6 +605,7 @@ class TriPlaneGenerator(torch.nn.Module):
 
             # to save ply during G_ema eval
             _xyz_offset = None
+            # print(f"batch size: {bg_gen_batch.shape}")
             ## TODO: can gaussiam splatting run batch in parallel?
             for _gs_i, _cam2world_matrix, _intrinsics, textures_gen, bg_gen in zip(range(len(textures_gen_batch)), cam2world_matrix, intrinsics, textures_gen_batch, bg_gen_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
                 # randomly select a new gaussian for each rendering
