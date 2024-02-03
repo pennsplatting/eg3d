@@ -249,7 +249,9 @@ class GaussianModel_OffsetXYZ:
         self.spatial_lr_scale = 0 # FIXME: hardcoded from original GS implementation, explained by authors in issue
 
         dist2 = torch.clamp_min(distCUDA2(self._xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
-        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3) # min: -8.0590, max: -4.3734, mode: -7~-6
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3) 
+        # 3DMM: min: -8.0590, max: -4.3734, mode: -7~-6 (may be wrong, use " scales.mode().values.max() " to check)
+        # DECA: min: -7.3208, max: -3.4435, mode: -7.32 ~ -3.44 (checked)
         rots = torch.zeros((self._xyz.shape[0], 4), device="cuda")
         rots[:, 0] = 1
 

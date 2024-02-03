@@ -32,12 +32,13 @@ import numpy as np
 
 from plyfile import PlyData
 import scipy.io as sio
+from scipy.io import loadmat
 import random
 import copy
 import trimesh
 import os
+# from pytorch3d.io import load_obj
 
-from scipy.io import loadmat
 import os.path as osp
 
 # FIXME: replace with gt texture for debug
@@ -118,9 +119,80 @@ def combine_list_of_gs(pc_list: [GaussianModel]):
     #     self._rotation = rotation
     
     return combined_gs
-    
 
-    
+
+def load_obj(obj_filename):
+    """ Ref: https://github.com/facebookresearch/pytorch3d/blob/25c065e9dafa90163e7cec873dbb324a637c68b7/pytorch3d/io/obj_io.py
+    Load a mesh from a file-like object.
+    """
+    with open(obj_filename, 'r') as f:
+        lines = [line.strip() for line in f]
+
+    verts, uvcoords = [], []
+    faces, uv_faces = [], []
+    # startswith expects each line to be a string. If the file is read in as
+    # bytes then first decode to strings.
+    if lines and isinstance(lines[0], bytes):
+        lines = [el.decode("utf-8") for el in lines]
+
+    for line in lines:
+        tokens = line.strip().split()
+        if line.startswith("v "):  # Line is a vertex.
+            vert = [float(x) for x in tokens[1:4]]
+            if len(vert) != 3:
+                msg = "Vertex %s does not have 3 values. Line: %s"
+                raise ValueError(msg % (str(vert), str(line)))
+            verts.append(vert)
+        elif line.startswith("vt "):  # Line is a texture.
+            tx = [float(x) for x in tokens[1:3]]
+            if len(tx) != 2:
+                raise ValueError(
+                    "Texture %s does not have 2 values. Line: %s" % (str(tx), str(line))
+                )
+            uvcoords.append(tx)
+        elif line.startswith("f "):  # Line is a face.
+            # Update face properties info.
+            face = tokens[1:]
+            face_list = [f.split("/") for f in face]
+            for vert_props in face_list:
+                # Vertex index.
+                faces.append(int(vert_props[0]))
+                if len(vert_props) > 1:
+                    if vert_props[1] != "":
+                        # Texture index is present e.g. f 4/1/1.
+                        uv_faces.append(int(vert_props[1]))
+
+    verts = torch.tensor(verts, dtype=torch.float32)
+    uvcoords = torch.tensor(uvcoords, dtype=torch.float32)
+    faces = torch.tensor(faces, dtype=torch.long); faces = faces.reshape(-1, 3) - 1
+    uv_faces = torch.tensor(uv_faces, dtype=torch.long); uv_faces = uv_faces.reshape(-1, 3) - 1
+    return (
+        verts,
+        uvcoords,
+        faces,
+        uv_faces
+    )
+
+def face_vertices(vertices, faces):
+    """ 
+    :param vertices: [batch size, number of vertices, 3]
+    :param faces: [batch size, number of faces, 3]
+    :return: [batch size, number of faces, 3, 3]
+    """
+    assert (vertices.ndimension() == 3)
+    assert (faces.ndimension() == 3)
+    assert (vertices.shape[0] == faces.shape[0])
+    # assert (vertices.shape[2] == 3)
+    assert (faces.shape[2] == 3)
+
+    # bs, nv = vertices.shape[:2]
+    bs, nv, last_dim = vertices.shape
+    bs, nf = faces.shape[:2]
+    device = vertices.device
+    faces = faces + (torch.arange(bs, dtype=torch.int32).to(device) * nv)[:, None, None]
+    vertices = vertices.reshape((bs * nv, last_dim))
+    # pytorch only supports long and byte tensors for indexing
+    return vertices[faces.long()]
     
 @persistence.persistent_class
 class TriPlaneGenerator(torch.nn.Module):
@@ -166,12 +238,21 @@ class TriPlaneGenerator(torch.nn.Module):
         
         self._last_planes = None
         
-        ### TODO: -------- 3dmm face model --------
-        self.uv_resolution = 256
+        ### -------- 3dmm face model --------
+        # self.uv_resolution = 256
+    
+        # self.load_face_model()
         
-        self.load_face_model()
+        ### load reduced index for front face only model
+        # self.keep_only_front_face_UV()
+        
         ### -------- 3dmm face model [end] --------
-
+        
+        ### -------- DECA face model --------
+        # self.load_face_model_DECA()
+        self.load_face_model_DECA_face_centers()
+        
+        ### -------- DECA face model [end] --------
         
         ### -------- gaussian splatting render --------
         self.gaussian_splatting_use_sr = False
@@ -223,17 +304,17 @@ class TriPlaneGenerator(torch.nn.Module):
         assert self.alpha_option in ['alpha', 'silhouette']
         self.normalize_rgb_image = True
         
-        # load reduced index for front face only model
-        self.keep_only_front_face_UV()
+       
 
-        self.init_from_the_same_canonical = False
+        self.init_from_the_same_canonical = init_from_the_same_canonical
         
         if self.init_from_the_same_canonical:
-            self.feature_structure = f'UV_{self.raw_uvcoords.shape[1]}'
-            
-            # init gaussian bank from the same canonical face
-            for i in range(1, self.num_gaussians+1): 
-                setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(self.verts), i))
+            if not optimize_gaussians:
+                self.num_gaussians = 1
+           
+            for i in range(1, self.num_gaussians+1):
+                setattr(self, f'v{i}', copy.deepcopy(self.verts))
+                
         else:
             
             # init gaussian bank from regressed 3DMM parameters
@@ -257,25 +338,22 @@ class TriPlaneGenerator(torch.nn.Module):
                 # setattr(self, f'g{i}', GaussianModel(self.sh_degree, copy.deepcopy(vertices), i))
                 setattr(self, f'v{i}', copy.deepcopy(vertices))
             self.plane_axes_gs = generate_planes().to(self.verts.device)
+    
             
         
         # all the following things must be executed after "self->keep_only_front_face_UV()"
-        
-        # gt, init with verts_rgb
-        # self.gaussian_debug = GaussianModel(self.sh_degree, copy.deepcopy(self.verts))
-        # self.gaussian_debug.update_rgb_textures(self.verts_rgb)
         
         # bg gaussian
         self.bg_resolution = bg_resolution
         bg_verts = torch.rand([self.bg_resolution * self.bg_resolution, 3]).to(self.verts.device) - 0.5
         self.bg_verts = bg_verts
+        # self.bg_verts = torch.empty(0).to(self.verts.device)
         self.bg_depth = bg_depth
         
-        # self.bg_gaussian = GaussianModel_BG(self.sh_degree, bg_verts)
+    
         uv_size = (self.bg_resolution, self.bg_resolution)
         self.bg_uvcoord = self.create_uniform_uv_coordinates(uv_size).to(device='cuda') # in range [-1,1]
-        # print(self.bg_uvcoord)
-        # st()
+      
 
         self.decode_before_gridsample = True
         
@@ -403,6 +481,7 @@ class TriPlaneGenerator(torch.nn.Module):
     def process_uv(self, uv_coords, uv_h = 256, uv_w = 256):
         return uv_coords*2-1.0
     
+    ## for 3DMM
     def load_face_model(self):
         # verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
         ## align with the actual training space of 3dmm, rather than the saved ply space
@@ -427,13 +506,74 @@ class TriPlaneGenerator(torch.nn.Module):
     
         uv_coords_processed = self.process_uv(uv_coords, uv_h, uv_w) #(53215, 2)
         self.register_buffer('raw_uvcoords', torch.tensor(uv_coords_processed[None], dtype=torch.float, device='cuda')) #[B, V, 2]
-        
+    
             
     def load_aligend_verts(self, ply_path):
         plydata = PlyData.read(ply_path)
         # normalize to [-0.5, 0.5] and place the center at origin
         v_np = np.array(plydata['vertex'].data.tolist()) / 512.0 - self.rendering_kwargs['box_warp'] / 2
         return torch.tensor(v_np, dtype=torch.float, device='cuda')
+    
+    ## for DECA
+    def load_face_model_DECA(self):
+        obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
+        ### DECA-standard version load_obj
+        _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
+
+        # uv coords
+        uvcoords = uvcoords[None, ...]
+
+        # uvcoords = torch.cat([uvcoords, uvcoords[:,:,0:1]*0.+1.], -1) #[bz, ntv, 3]: cat a 3rd dim, all ones
+        uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
+        self.register_buffer('raw_uvcoords', uvcoords)
+    
+        
+        # align the scale and directions with eg3d space
+        ply_filename_adjusted = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz.ply'
+        plydata = PlyData.read(ply_filename_adjusted)
+        verts_adjusted = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+        
+
+        # normalize to rendering space
+        verts_norm = verts_adjusted / 512.0 - self.rendering_kwargs['box_warp'] / 2
+        verts_norm = torch.tensor(verts_norm, dtype=torch.float, device='cuda')
+        self.register_buffer('verts', verts_norm)
+        
+        return 
+    
+    
+        
+        
+    def load_face_model_DECA_face_centers(self):
+        obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
+        ### DECA-standard version load_obj
+        _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
+        
+        faces = faces[None, ...]
+        uvfaces = uvfaces[None, ...]
+        uvcoords = uvcoords[None, ...]
+
+        # uv coords
+        uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
+        face_uvcoords = face_vertices(uvcoords, uvfaces)
+        face_center_verts_uv = face_uvcoords.mean(dim=-2)
+        self.register_buffer('raw_uvcoords', face_center_verts_uv)
+    
+        
+        # align the scale and directions with eg3d space
+        ply_filename_adjusted = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz.ply'
+        plydata = PlyData.read(ply_filename_adjusted)
+        verts_adjusted = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+        verts_adjusted = torch.tensor(verts_adjusted)
+        face_center_verts = face_vertices(verts_adjusted[None], faces)
+        face_center_verts = face_center_verts.mean(dim=-2)
+
+        # normalize to rendering space
+        face_center_verts_norm = face_center_verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+        face_center_verts_norm = torch.tensor(face_center_verts_norm, dtype=torch.float, device='cuda')
+        self.register_buffer('verts', face_center_verts_norm[0])
+
+        return 
         
     def mapping(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
         if self.rendering_kwargs['c_gen_conditioning_zero']:
@@ -600,11 +740,12 @@ class TriPlaneGenerator(torch.nn.Module):
 
             bg_gaussian = GaussianModel_BG(self.sh_degree, self.bg_verts)
             
-            real_image_batch = []
+            
+            
+            # real_image_batch = []
 
             # to save ply during G_ema eval
             _xyz_offset = None
-            # print(f"batch size: {bg_gen_batch.shape}")
             ## TODO: can gaussiam splatting run batch in parallel?
             for _gs_i, _cam2world_matrix, _intrinsics, textures_gen, bg_gen in zip(range(len(textures_gen_batch)), cam2world_matrix, intrinsics, textures_gen_batch, bg_gen_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
                 # randomly select a new gaussian for each rendering
@@ -663,7 +804,6 @@ class TriPlaneGenerator(torch.nn.Module):
                     bg_xyz += _xyz_offset
                     start_dim += 3
                     
-                # self.bg_gaussian.update_xyz(bg_xyz)
                 bg_gaussian.update_xyz(bg_xyz)
             
                 assert start_dim==textures.shape[1]

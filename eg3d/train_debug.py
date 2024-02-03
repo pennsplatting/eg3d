@@ -214,7 +214,8 @@ def parse_comma_separated_list(s):
 # GS bank
 @click.option('--num_gaussians', help='Number of gaussian models in the gaussian bank', metavar='INT', type=click.IntRange(min=1), default=500, required=False, show_default=True)
 @click.option('--optimize_gaussians', help='Optimize gaussian attributes of gaussian models in generator', metavar='BOOL',  type=bool, required=False, default=False)
-@click.option('--template_model', help='Type of template model as canonical geometry', metavar='STR',  type=click.Choice(['3DMM', 'FLAME']), required=False, default='3DMM')
+@click.option('--init_from_the_same_canonical', help='Init from the same gaussian model or different gaussian models regressed from images in generator', metavar='BOOL',  type=bool, required=False, default=False)
+@click.option('--template_model', help='Type of template model as canonical geometry', metavar='STR',  type=click.Choice(['3DMM', 'FLAME', 'DECA']), required=False, default='3DMM')
 
 # GS bg
 @click.option('--real_bg', help='Enable real background generation in generator', metavar='BOOL',  type=bool, required=False, default=False)
@@ -319,11 +320,11 @@ def main(**kwargs):
     # c.G_kwargs.class_name = 'training.triplane_next3d_multiple_gaussian.TriPlaneGenerator'
     c.G_kwargs.class_name = 'training.triplane_next3d_offset_gaussian.TriPlaneGenerator'
     if opts.real_bg:
-        if opts.template_model=='FLAME':
-            c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_FLAME.TriPlaneGenerator'
+        if opts.template_model=='DECA':
+            c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_DECA.TriPlaneGenerator'
         else:
             # c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_bg.TriPlaneGenerator'
-            c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_pkl.TriPlaneGenerator'
+            c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_pkl.TriPlaneGenerator' # all functions are the same as with white bg, but make it pickable
     print('c.G_kwargs.class_name:', c.G_kwargs.class_name)
     ## D
     if opts.low_res_training:
@@ -358,6 +359,7 @@ def main(**kwargs):
     ## GS bank
     c.G_kwargs.num_gaussians = opts.num_gaussians   
     c.G_kwargs.optimize_gaussians = opts.optimize_gaussians
+    c.G_kwargs.init_from_the_same_canonical = opts.init_from_the_same_canonical
     c.G_kwargs.no_activation_in_decoder = opts.no_activation_in_decoder
     ## GS rendering
     c.G_kwargs.low_res_training = opts.low_res_training
