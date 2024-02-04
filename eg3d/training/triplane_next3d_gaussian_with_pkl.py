@@ -138,7 +138,7 @@ class TriPlaneGenerator(torch.nn.Module):
         bg_resolution, 
         bg_depth,
         low_res_training,
-        regularize_fg_opacity = True,
+        regularize_fg_opacity,
         sh_degree           = 3,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         text_decoder_kwargs = {},   # GS TextureDecoder
@@ -178,6 +178,7 @@ class TriPlaneGenerator(torch.nn.Module):
         ### -------- gaussian splatting render --------
         self.gaussian_splatting_use_sr = False
         self.render_fg_bg_separately = render_fg_bg_separately
+        self.regularize_fg_opacity = regularize_fg_opacity
 
 
         # use colors_precomp instead of shs in gaussian_model.render()
@@ -197,7 +198,6 @@ class TriPlaneGenerator(torch.nn.Module):
         ## v2: gausian rendering -> 256 x 256 : self.gaussian_splatting_use_sr = False
         # res
         self.low_res_training = low_res_training
-        self.regularize_fg_opacity = regularize_fg_opacity
 
         if self.low_res_training:
             image_size = self.neural_rendering_resolution
@@ -758,10 +758,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 ## render foreground and bg separately
                 if self.render_fg_bg_separately:
-                    # rgb_image_batch_fg = []
-                    # alpha_image_batch_fg = [] # mask
-                    # rgb_image_batch_bg = []
-                    # alpha_image_batch_bg = [] # mask
+                   
                     res_fg = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
                     _rgb_image_fg = res_fg["render"]
                     _alpha_image_fg = 1 - res_fg["alpha"]

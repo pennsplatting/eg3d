@@ -338,6 +338,7 @@ def main(**kwargs):
     c.G_kwargs.fused_modconv_default = 'inference_only' # Speed up training by using regular convolutions instead of grouped convolutions.
     ## Loss
     c.loss_kwargs.opacity_reg = opts.opacity_reg
+    c.G_kwargs.regularize_fg_opacity = opts.opacity_reg > 0
     
     if opts.use_mask_condition:
         c.loss_kwargs.class_name='training.loss_mask_condition.StyleGAN2Loss'
