@@ -133,6 +133,7 @@ class TriPlaneGenerator(torch.nn.Module):
         num_gaussians,              # Number of gaussian bases in the bank.
         optimize_gaussians, 
         init_from_the_same_canonical, 
+        render_fg_bg_separately,
         no_activation_in_decoder,
         bg_resolution, 
         bg_depth,
@@ -175,6 +176,8 @@ class TriPlaneGenerator(torch.nn.Module):
         
         ### -------- gaussian splatting render --------
         self.gaussian_splatting_use_sr = False
+        self.render_fg_bg_separately = render_fg_bg_separately
+
 
         # use colors_precomp instead of shs in gaussian_model.render()
         self.use_colors_precomp = False
@@ -597,10 +600,14 @@ class TriPlaneGenerator(torch.nn.Module):
 
             rgb_image_batch = []
             alpha_image_batch = [] # mask
+            
+            if self.render_fg_bg_separately:
+                rgb_image_batch_fg = []
+                alpha_image_batch_fg = [] # mask
+                rgb_image_batch_bg = []
+                alpha_image_batch_bg = [] # mask
 
             bg_gaussian = GaussianModel_BG(self.sh_degree, self.bg_verts)
-            
-            real_image_batch = []
 
             # to save ply during G_ema eval
             _xyz_offset = None
@@ -733,31 +740,52 @@ class TriPlaneGenerator(torch.nn.Module):
                     current_gaussian_with_bg = combine_list_of_gs([current_gaussian, bg_gaussian])
                     current_gaussian_with_bg.save_ply(gs_fname)
                     
-                
-                # res = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
-                # res = gs_render(self.viewpoint_camera, self.bg_gaussian, None, self.background, override_color=override_color)
-                # res = gs_render_with_bg(self.viewpoint_camera, [current_gaussian, self.bg_gaussian], None, self.background, override_color=override_color)
                 res = gs_render_with_bg(self.viewpoint_camera, [current_gaussian, bg_gaussian], None, self.background, override_color=override_color)
                 
                 _rgb_image = res["render"]
                 _alpha_image = 1 - res["alpha"]
             
-                ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
-                
+           
                 rgb_image_batch.append(_rgb_image[None])
                 alpha_image_batch.append(_alpha_image[None])
-                # _real_image = gs_render(self.viewpoint_camera, self.gaussian_debug, None, self.background, override_color=self.verts_rgb if self.use_colors_precomp else None)["render"]
-                # real_image_batch.append(_real_image[None])
+                
+                ## render foreground and bg separately
+                if self.render_fg_bg_separately:
+                    # rgb_image_batch_fg = []
+                    # alpha_image_batch_fg = [] # mask
+                    # rgb_image_batch_bg = []
+                    # alpha_image_batch_bg = [] # mask
+                    res_fg = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
+                    _rgb_image_fg = res_fg["render"]
+                    _alpha_image_fg = 1 - res_fg["alpha"]
+                    rgb_image_batch_fg.append(_rgb_image_fg[None])
+                    alpha_image_batch_fg.append(_alpha_image_fg[None])
+                    
+                    res_bg = gs_render(self.viewpoint_camera, bg_gaussian, None, self.background, override_color=override_color)
+                    _rgb_image_bg = res_bg["render"]
+                    _alpha_image_bg = 1 - res_bg["alpha"]
+                    rgb_image_batch_bg.append(_rgb_image_bg[None])
+                    alpha_image_batch_bg.append(_alpha_image_bg[None])
+
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
-            # real_image = torch.cat(real_image_batch)
             real_image = None
+            
+            if self.render_fg_bg_separately:
+                rgb_image_fg = torch.cat(rgb_image_batch_fg) # [4, 3, gs_res, gs_res]
+                alpha_image_fg = torch.cat(alpha_image_batch_fg)
+                rgb_image_bg = torch.cat(rgb_image_batch_bg) # [4, 3, gs_res, gs_res]
+                alpha_image_bg = torch.cat(alpha_image_batch_bg)
+            
             if self.normalize_rgb_image:
                 ## FIXME: try different normalization method to normalize rgb image to [-1,1]
                 # rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
                 rgb_image = (rgb_image - 0.5) * 2
                 # print(f'rgb_image range: {rgb_image.min()}~{rgb_image.max()}')
+                if self.render_fg_bg_separately:
+                    rgb_image_fg = (rgb_image_fg - 0.5) * 2
+                    rgb_image_bg = (rgb_image_bg - 0.5) * 2
     
             
             ## TODO: the below superresolution shall be kept?
@@ -777,7 +805,11 @@ class TriPlaneGenerator(torch.nn.Module):
 
         # return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image}
         # print(f"alpha range; {alpha_image.min(), alpha_image.max()}")
-        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image} # all in range  [0,1]
+        if self.render_fg_bg_separately:
+            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image,
+                    'image_fg': rgb_image_fg, 'image_mask_fg': alpha_image_fg, 'image_bg': rgb_image_bg, 'image_mask_bg': alpha_image_bg}
+        
+        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image}
     
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
