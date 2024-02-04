@@ -68,7 +68,8 @@ def load_mesh_with_colors(file_path):
     return vertices, vertex_colors
 
 def load_real_texture(file_path, device='cuda'):
-    img = cv2.imread(file_path) / 255.0 # Normalize to [0, 1]
+    img = cv2.imread(file_path)
+    img = cv2.cvtColor(img,cv2.COLOR_BGR2RGB) / 255.0 # Normalize to [0, 1]
     return torch.tensor(img, dtype=torch.float32, device=device).permute(2,0,1).unsqueeze(0)
 
 def print_grad(name, grad):
