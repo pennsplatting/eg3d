@@ -238,7 +238,8 @@ def parse_comma_separated_list(s):
 # GS rendering resolution during training
 @click.option('--low_res_training', help='Enable low_res gaussian rendering during training', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--render_fg_bg_separately', help='render_fg_bg_separately during image saving ticks', metavar='BOOL',  type=bool, required=False, default=True)
-
+# Loss for GS foregroud supervision
+@click.option('--opacity_reg',    help='Opacity regularizatio for GS foreground strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=0.25, required=False, show_default=True)
 
 
 def main(**kwargs):
@@ -336,10 +337,12 @@ def main(**kwargs):
         c.D_kwargs.class_name = 'training.dual_discriminator_mask_condition.DualDiscriminator'
     c.G_kwargs.fused_modconv_default = 'inference_only' # Speed up training by using regular convolutions instead of grouped convolutions.
     ## Loss
+    c.loss_kwargs.opacity_reg = opts.opacity_reg
+    
     if opts.use_mask_condition:
         c.loss_kwargs.class_name='training.loss_mask_condition.StyleGAN2Loss'
-        c.loss_kwargs.reg_weight = 0
-        c.loss_kwargs.opacity_reg = 0
+        c.loss_kwargs.reg_weight = 0 # FIXME: if used later, should have a corresponding click option
+        c.loss_kwargs.opacity_reg = opts.opacity_reg
         c.loss_kwargs.use_mask = opts.use_mask_condition
     
     ## GS Texture Decoder options

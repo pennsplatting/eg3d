@@ -138,6 +138,7 @@ class TriPlaneGenerator(torch.nn.Module):
         bg_resolution, 
         bg_depth,
         low_res_training,
+        regularize_fg_opacity = True,
         sh_degree           = 3,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         text_decoder_kwargs = {},   # GS TextureDecoder
@@ -196,6 +197,7 @@ class TriPlaneGenerator(torch.nn.Module):
         ## v2: gausian rendering -> 256 x 256 : self.gaussian_splatting_use_sr = False
         # res
         self.low_res_training = low_res_training
+        self.regularize_fg_opacity = regularize_fg_opacity
 
         if self.low_res_training:
             image_size = self.neural_rendering_resolution
@@ -606,6 +608,9 @@ class TriPlaneGenerator(torch.nn.Module):
                 alpha_image_batch_fg = [] # mask
                 rgb_image_batch_bg = []
                 alpha_image_batch_bg = [] # mask
+                
+            if self.regularize_fg_opacity:
+                opacity_image_batch_fg = []
 
             bg_gaussian = GaussianModel_BG(self.sh_degree, self.bg_verts)
 
@@ -710,6 +715,8 @@ class TriPlaneGenerator(torch.nn.Module):
                             _opacity = textures[0,start_dim:start_dim+1,0].permute(1,0) # should be no adjustment for sigmoid
                             start_dim += 1
                             current_gaussian.update_opacity(_opacity)
+                            if self.regularize_fg_opacity:
+                                opacity_image_batch_fg.append(_opacity[None])
                         
                         if self.text_decoder.options['gen_scaling']:
                             _scaling = textures[0,start_dim:start_dim+3,0].permute(1,0)
@@ -778,6 +785,9 @@ class TriPlaneGenerator(torch.nn.Module):
                 rgb_image_bg = torch.cat(rgb_image_batch_bg) # [4, 3, gs_res, gs_res]
                 alpha_image_bg = torch.cat(alpha_image_batch_bg)
             
+            if self.regularize_fg_opacity:
+                opacity_image_fg = torch.cat(opacity_image_batch_fg) # [4, Npts, 1]
+            
             if self.normalize_rgb_image:
                 ## FIXME: try different normalization method to normalize rgb image to [-1,1]
                 # rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
@@ -786,7 +796,8 @@ class TriPlaneGenerator(torch.nn.Module):
                 if self.render_fg_bg_separately:
                     rgb_image_fg = (rgb_image_fg - 0.5) * 2
                     rgb_image_bg = (rgb_image_bg - 0.5) * 2
-    
+            
+            
             
             ## TODO: the below superresolution shall be kept?
             ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?
@@ -805,11 +816,20 @@ class TriPlaneGenerator(torch.nn.Module):
 
         # return {'image': sr_image, 'image_raw': rgb_image, 'image_depth': depth_image}
         # print(f"alpha range; {alpha_image.min(), alpha_image.max()}")
-        if self.render_fg_bg_separately:
-            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image,
-                    'image_fg': rgb_image_fg, 'image_mask_fg': alpha_image_fg, 'image_bg': rgb_image_bg, 'image_mask_bg': alpha_image_bg}
+        synthesis_out = {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image}
         
-        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image}
+        if self.render_fg_bg_separately:
+            # return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image,
+            #         'image_fg': rgb_image_fg, 'image_mask_fg': alpha_image_fg, 'image_bg': rgb_image_bg, 'image_mask_bg': alpha_image_bg}
+            synthesis_out.update({
+                'image_fg': rgb_image_fg, 'image_mask_fg': alpha_image_fg, 'image_bg': rgb_image_bg, 'image_mask_bg': alpha_image_bg
+                })
+        if self.regularize_fg_opacity:
+            synthesis_out.update({
+                'opacity_image_fg': opacity_image_fg
+                                  })
+        
+        return synthesis_out
     
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
