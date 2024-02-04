@@ -67,6 +67,9 @@ def load_mesh_with_colors(file_path):
 
     return vertices, vertex_colors
 
+def load_real_texture(file_path, device='cuda'):
+    img = cv2.imread(file_path) / 255.0 # Normalize to [0, 1]
+    return torch.tensor(img, dtype=torch.float32, device=device).permute(2,0,1).unsqueeze(0)
 
 def print_grad(name, grad):
     print(f"{name}:")
@@ -209,6 +212,7 @@ class TriPlaneGenerator(torch.nn.Module):
         bg_resolution, 
         bg_depth,
         low_res_training,
+        test_texture,
         sh_degree           = 3,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         text_decoder_kwargs = {},   # GS TextureDecoder
@@ -251,6 +255,7 @@ class TriPlaneGenerator(torch.nn.Module):
         ### -------- DECA face model --------
         # self.load_face_model_DECA()
         self.load_face_model_DECA_face_centers()
+        self.test_texture = test_texture
         
         ### -------- DECA face model [end] --------
         
@@ -719,8 +724,10 @@ class TriPlaneGenerator(torch.nn.Module):
             # Reshape output into three 32-channel planes
             if ('UV' in self.feature_structure):
                 if self.decode_before_gridsample: # decode before grid sample
-                    
-                    textures_gen_batch = self.text_decoder(planes[:, :self.planes_channels_uv]) # (4, 96, 256, 256) -> (4, SH, 256, 256), range [0,1]
+                    if self.test_texture: # see if uv map is correct
+                        textures_gen_batch = load_real_texture("/home/ritz/eg3d/eg3d/data/DECA_UV/texture-alfw1.png").repeat(planes.shape[0],1,1,1)
+                    else:
+                        textures_gen_batch = self.text_decoder(planes[:, :self.planes_channels_uv]) # (4, 96, 256, 256) -> (4, SH, 256, 256), range [0,1]
                     textures_gen_batch = F.grid_sample(textures_gen_batch, self.raw_uvcoords.unsqueeze(0).repeat(textures_gen_batch.shape[0],1,1,1), align_corners=False) # (B, C, 1, N_pts)
 
                     ## decode bg
@@ -825,6 +832,9 @@ class TriPlaneGenerator(torch.nn.Module):
                 if self.use_colors_precomp:
                     override_color = textures[0,:3,0].permute(1,0) # override_color -> [Npts, 3], range in [0,1]
                     current_gaussian.update_rgb_textures(override_color)
+                elif self.test_texture:
+                    override_color = None
+                    current_gaussian.update_rgb_textures(textures[0,:,0].permute(1,0))
                 else:
                     override_color = None
                     if self.text_decoder_class == 'TextureDecoder_allAttributes':
@@ -873,7 +883,10 @@ class TriPlaneGenerator(torch.nn.Module):
                     # combine bg_gaussian and current gaussian
                     # current_gaussian_with_bg = combine_list_of_gs([current_gaussian, self.bg_gaussian])
                     current_gaussian_with_bg = combine_list_of_gs([current_gaussian, bg_gaussian])
-                    current_gaussian_with_bg.save_ply(gs_fname)
+                    if self.test_texture:
+                        current_gaussian_with_bg.save_ply(gs_fname, save_override_color=True)
+                    else:
+                        current_gaussian_with_bg.save_ply(gs_fname)
                     
                 
                 # res = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)

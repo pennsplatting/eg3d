@@ -237,7 +237,7 @@ def parse_comma_separated_list(s):
 @click.option('--save_gaussian_ply', help='Enable gaussian ply saving during image saving ticks', metavar='BOOL',  type=bool, required=False, default=True)
 # GS rendering resolution during training
 @click.option('--low_res_training', help='Enable low_res gaussian rendering during training', metavar='BOOL',  type=bool, required=False, default=False)
-
+@click.option('--test_texture', help='Test UV coordinates', metavar='BOOL',  type=bool, required=False, default=False)
 
 
 def main(**kwargs):
@@ -363,6 +363,7 @@ def main(**kwargs):
     c.G_kwargs.no_activation_in_decoder = opts.no_activation_in_decoder
     ## GS rendering
     c.G_kwargs.low_res_training = opts.low_res_training
+    c.G_kwargs.test_texture = opts.test_texture
 
     ## GS save ply in G_ema 
     c.save_gaussian_ply = opts.save_gaussian_ply
