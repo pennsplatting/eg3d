@@ -289,6 +289,9 @@ def training_loop(
     common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels)
     G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G.register_buffer('dataset_label_std', torch.tensor(training_set.get_label_std()).to(device))
+    
+    if G_kwargs.low_res_training:
+        common_kwargs.update({'img_resolution':G.image_size})
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval() # running average of the weights of generator
 
@@ -675,21 +678,24 @@ def training_loop(
 
         # Save image snapshot.
         print(f"image_snapshot_ticks is {image_snapshot_ticks}")
-        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0): 
+        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             if not save_gaussian_ply:
-                out = [G_ema(z=z, c=c, noise_mode='const', ) for z, c in zip(grid_z, grid_c)] # len(grid_z)=30
+                out = [G_ema(z=z, c=c, noise_mode='const') for z, c in zip(grid_z, grid_c)] # len(grid_z)=30
             else:
                 # pass in the argument of file names to save gs
-                
-                out = [G_ema(z=z, c=c, noise_mode='const', gs_fname_batch=os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_{i:03d}')) for i, (z, c) in enumerate(zip(grid_z, grid_c))] # len(grid_z)=30, but each is a batch of 4. Total=120.
+                out = [G_ema(z=z, c=c, noise_mode='const', gs_fname_batch=os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}/b{i:03d}')) for i, (z, c) in enumerate(zip(grid_z, grid_c))] # len(grid_z)=30, but each is a batch of 4. Total=120.
+            
             images = torch.cat([o['image'].cpu() for o in out]).detach().numpy()
-            images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
+            # images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
             images_mask = torch.cat([o['image_mask'].cpu() for o in out]).detach().numpy()
             # images_real = torch.cat([o['image_real'].cpu() for o in out]).detach().numpy() # FIXME: init with gt texture for debug
 
             rgb_drange = [-1,1] if G_ema.normalize_rgb_image else [0,1]
+            
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=rgb_drange, grid_size=grid_size)
-            save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=rgb_drange, grid_size=grid_size)
+            if not G_ema.low_res_training:
+                images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
+                save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=rgb_drange, grid_size=grid_size)
             save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[0, 1], grid_size=grid_size)
             # save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[0,1], grid_size=grid_size)
             
@@ -744,8 +750,8 @@ def training_loop(
         snapshot_data = None
 
         ## TODO: recover this save snapshot
-        # if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
-        if True:
+        if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
+        # if True:
             snapshot_data = dict(training_set_kwargs=dict(training_set_kwargs))
             for name, module in [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]:
                 if module is not None:
@@ -753,7 +759,7 @@ def training_loop(
                         misc.check_ddp_consistency(module, ignore_regex=r'.*\.[^.]+_(avg|ema)')
                     # module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
                     # module = module.detach().clone().eval().requires_grad_(False).cpu()
-                    print(f"copying module {name}")
+                    # print(f"copying module {name}")
                     # st()
                     module = copy.deepcopy(module).eval().requires_grad_(False).cpu()
                 snapshot_data[name] = module
