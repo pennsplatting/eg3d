@@ -215,10 +215,10 @@ def parse_comma_separated_list(s):
 @click.option('--num_gaussians', help='Number of gaussian models in the gaussian bank', metavar='INT', type=click.IntRange(min=1), default=500, required=False, show_default=True)
 @click.option('--optimize_gaussians', help='Optimize gaussian attributes of gaussian models in generator', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--init_from_the_same_canonical', help='Init from the same gaussian model or different gaussian models regressed from images in generator', metavar='BOOL',  type=bool, required=False, default=False)
-@click.option('--template_model', help='Type of template model as canonical geometry', metavar='STR',  type=click.Choice(['3DMM', 'FLAME', 'DECA']), required=False, default='3DMM')
+@click.option('--template_model', help='Type of template model as canonical geometry', metavar='STR',  type=click.Choice(['3DMM', 'DECA', 'DECA_splatter']), required=False, default='3DMM')
 
 # GS bg
-@click.option('--real_bg', help='Enable real background generation in generator', metavar='BOOL',  type=bool, required=False, default=False)
+@click.option('--real_bg', help='Enable real background generation in generator', metavar='BOOL',  type=bool, required=False, default=True)
 # GS bg decoder options
 @click.option('--bg_gen_rgb', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
 @click.option('--bg_gen_sh', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
@@ -237,9 +237,9 @@ def parse_comma_separated_list(s):
 @click.option('--save_gaussian_ply', help='Enable gaussian ply saving during image saving ticks', metavar='BOOL',  type=bool, required=False, default=False)
 # GS rendering resolution during training
 @click.option('--low_res_training', help='Enable low_res gaussian rendering during training', metavar='BOOL',  type=bool, required=False, default=False)
-@click.option('--render_fg_bg_separately', help='render_fg_bg_separately during image saving ticks', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--render_fg_bg_separately', help='render_fg_bg_separately during image saving ticks', metavar='BOOL',  type=bool, required=False, default=False)
 # Loss for GS foregroud supervision
-@click.option('--opacity_reg',    help='Opacity regularization for GS foreground strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=0.25, required=False, show_default=True)
+@click.option('--opacity_reg',    help='Opacity regularization for GS foreground strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=0, required=False, show_default=True)
 @click.option('--opacity_ref_value',    help='Desired opacity value for GS foreground.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
 @click.option('--opacity_loss_choice', help='Type of opacity loss for GS foreground.', metavar='STR',  type=click.Choice(['l1', 'smooth_l1', 'l2']), required=False, default='l1', show_default=True)
 
@@ -324,9 +324,11 @@ def main(**kwargs):
     # c.G_kwargs.class_name = 'training.triplane_next3d_multiple_gaussian.TriPlaneGenerator'
     c.G_kwargs.class_name = 'training.triplane_next3d_offset_gaussian.TriPlaneGenerator'
     if opts.real_bg:
-        if opts.template_model=='DECA':
+        if opts.template_model=='DECA_splatter':
+            c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_DECA_splatter.TriPlaneGenerator'
+        elif opts.template_model=='DECA':
             c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_DECA.TriPlaneGenerator'
-        else:
+        elif opts.template_model=='3DMM':
             # c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_bg.TriPlaneGenerator'
             c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_pkl.TriPlaneGenerator' # all functions are the same as with white bg, but make it pickable
     print('c.G_kwargs.class_name:', c.G_kwargs.class_name)
