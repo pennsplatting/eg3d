@@ -239,7 +239,9 @@ def parse_comma_separated_list(s):
 @click.option('--low_res_training', help='Enable low_res gaussian rendering during training', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--render_fg_bg_separately', help='render_fg_bg_separately during image saving ticks', metavar='BOOL',  type=bool, required=False, default=True)
 # Loss for GS foregroud supervision
-@click.option('--opacity_reg',    help='Opacity regularizatio for GS foreground strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=0.25, required=False, show_default=True)
+@click.option('--opacity_reg',    help='Opacity regularization for GS foreground strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=0.25, required=False, show_default=True)
+@click.option('--opacity_ref_value',    help='Desired opacity value for GS foreground.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
+@click.option('--opacity_loss_choice', help='Type of opacity loss for GS foreground.', metavar='STR',  type=click.Choice(['l1', 'smooth_l1', 'l2']), required=False, default='l1', show_default=True)
 
 
 def main(**kwargs):
@@ -338,6 +340,7 @@ def main(**kwargs):
     c.G_kwargs.fused_modconv_default = 'inference_only' # Speed up training by using regular convolutions instead of grouped convolutions.
     ## Loss
     c.loss_kwargs.opacity_reg = opts.opacity_reg
+    c.loss_kwargs.opacity_loss_choice = opts.opacity_loss_choice
     c.G_kwargs.regularize_fg_opacity = opts.opacity_reg > 0
     
     if opts.use_mask_condition:
