@@ -234,7 +234,7 @@ def parse_comma_separated_list(s):
 @click.option('--bg_resolution', help='Resolution of num gaussians used to render bg', metavar='INT', type=click.IntRange(min=1), default=128, required=False, show_default=True)
 @click.option('--bg_depth', help='How many (ray_origin + ray_dir * bg_depth) is used to control the distance of bg gaussian to image plane', metavar='INT', type=click.IntRange(min=1), default=5, required=False, show_default=True)
 # GS save viz
-@click.option('--save_gaussian_ply', help='Enable gaussian ply saving during image saving ticks', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--save_gaussian_ply', help='Enable gaussian ply saving during image saving ticks', metavar='BOOL',  type=bool, required=False, default=False)
 # GS rendering resolution during training
 @click.option('--low_res_training', help='Enable low_res gaussian rendering during training', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--render_fg_bg_separately', help='render_fg_bg_separately during image saving ticks', metavar='BOOL',  type=bool, required=False, default=True)
