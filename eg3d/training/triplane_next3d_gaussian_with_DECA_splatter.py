@@ -263,10 +263,10 @@ class TriPlaneGenerator(torch.nn.Module):
         self.bg_resolution = bg_resolution
         self.bg_depth = bg_depth
         
-        deca_splatter_choice = splatter_method
-        if deca_splatter_choice=='v1':
+        self.splatter_method = splatter_method
+        if self.splatter_method =='v1':
             self.load_face_model_DECA_splatter_v1()
-        elif deca_splatter_choice=='v2':
+        elif self.splatter_method =='v2':
             self.load_face_model_DECA_splatter_v2()
         else:
             assert ValueError("Invalid init method for deca splatter img")
@@ -456,6 +456,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # For adding BG
             'backbone output planes_channels(All)': self.planes_channels,
             # # For adding Splatter
+            "splatter_method": self.splatter_method,
             "splatter_resolution": self.bg_resolution, 
             "splatter_depth(init scale)": self.bg_depth,
             "splatter_z(world absolute)": self.target_bg_z_value
