@@ -205,7 +205,7 @@ class TriPlaneGenerator(torch.nn.Module):
         num_gaussians,              # Number of gaussian bases in the bank.
         optimize_gaussians, 
         init_from_the_same_canonical, 
-        # deca_splatter_choice,
+        splatter_method,
         no_activation_in_decoder,
         bg_resolution, 
         bg_depth,
@@ -263,7 +263,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.bg_resolution = bg_resolution
         self.bg_depth = bg_depth
         
-        deca_splatter_choice = 'v2'
+        deca_splatter_choice = splatter_method
         if deca_splatter_choice=='v1':
             self.load_face_model_DECA_splatter_v1()
         elif deca_splatter_choice=='v2':
@@ -561,31 +561,98 @@ class TriPlaneGenerator(torch.nn.Module):
         
         return 
 
-        
+
     def load_face_model_DECA_splatter_v1(self):
-        obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
-        ### DECA-standard version load_obj
-        _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
-        
-        faces = faces[None, ...]
-        uvfaces = uvfaces[None, ...]
-        uvcoords = uvcoords[None, ...]
-
-        # uv coords
-        uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
-        face_uvcoords = face_vertices(uvcoords, uvfaces)
-        face_center_verts_uv = face_uvcoords.mean(dim=-2)
-        self.register_buffer('raw_uvcoords', face_center_verts_uv)
     
+        # # align the scale and directions with eg3d space
+        # ply_filename_adjusted = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz_face_centers_fg_bg_depth5_norm.ply' # already normalized to rendering space
         
-        # align the scale and directions with eg3d space
-        ply_filename_adjusted = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz_face_centers_fg_bg_depth5_norm.ply' # already normalized to rendering space
-        
-        plydata = PlyData.read(ply_filename_adjusted)
-        face_center_verts_norm = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+        # plydata = PlyData.read(ply_filename_adjusted)
+        # face_center_verts_norm = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
 
+        # face_center_verts_norm = torch.tensor(face_center_verts_norm, dtype=torch.float, device='cuda')
+        # self.register_buffer('verts', face_center_verts_norm[0])
+        
+        ## on the fly create norm verts
+        ply_filename = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz_face_centers.ply'
+        plydata = PlyData.read(ply_filename)
+        face_center_verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+
+        ### normalize to eg3d
+        face_center_verts_norm = face_center_verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
         face_center_verts_norm = torch.tensor(face_center_verts_norm, dtype=torch.float, device='cuda')
-        self.register_buffer('verts', face_center_verts_norm[0])
+
+        ### create bg points
+        intrisics = torch.tensor([[[4.2647, 0.0000, 0.5000],
+         [0.0000, 4.2647, 0.5000],
+         [0.0000, 0.0000, 1.0000]]]) # same as FFHQ dataset intrinsic. TODO: generalize to other datasets later
+        c2w = torch.eye(4)[None]
+        c2w[0,2,2] *= -1 # lookat: neg z
+        
+        # todo: make all the following as hyperparameters
+        ## reuse the depth & res definition for bg gaussian, but they are actually for splatter image
+        splatter_resolution = self.bg_resolution
+        bg_depth = self.bg_depth # this is not the actual depth since they are either on the sphere or on the half-head plane, but can be seen as a scale factor of the h & w of the bg plane.
+        target_bg_z_value = -0.1 # the z-value of plane that intersecting the head
+        self.target_bg_z_value = target_bg_z_value
+        
+        ray_origins, ray_directions = self.ray_sampler(c2w, intrisics, splatter_resolution)
+        
+        bg_verts = ray_origins + ray_directions * bg_depth # already in eg3d rendering space
+        bg_verts = bg_verts.to(device='cuda')
+
+        # combine face model and bg parts
+        ## remove the bg verts: those inside the range of the face model
+        verts = face_center_verts_norm
+        x_min, x_max = verts[...,0].min(), verts[...,0].max()
+        y_min, y_max = verts[...,1].min(), verts[...,1].max()
+        z_min, z_max = verts[...,2].min(), verts[...,2].max()
+        
+        mask_x = (bg_verts[..., 0] >= x_min) & (bg_verts[..., 0] <= x_max)
+        mask_y = (bg_verts[..., 1] >= y_min) & (bg_verts[..., 1] <= y_max)
+        blocked_mask = mask_x & mask_y
+        
+        blocked_z_value = 20 # a very large distance behind the cam, discarded later
+        
+        bg_verts_unblocked_z = torch.where( 
+            blocked_mask, # cond
+            blocked_z_value , # if true, discard
+            target_bg_z_value # if false
+        )
+        
+        
+        bg_verts_unblocked = torch.cat([bg_verts[...,:2],bg_verts_unblocked_z[...,None]], dim=-1)
+        
+        ## remove the fg points: those are behind the image plane
+        
+        mask_fg = (face_center_verts_norm[..., 2] < target_bg_z_value) # those behind the image plane
+
+        fg_verts_unblocked_z = torch.where(
+            mask_fg, # cond
+            blocked_z_value , # if true, discard
+            face_center_verts_norm[...,2]# if false
+        )
+
+        fg_verts_unblocked_norm = torch.cat([face_center_verts_norm[...,:2],fg_verts_unblocked_z[...,None]], dim=-1)
+        
+        ## combine the fg bg verts
+        
+        fg_and_unblocked_bg_norm = torch.cat([fg_verts_unblocked_norm[None], bg_verts_unblocked], dim=1)
+        print(face_center_verts_norm.shape)
+        
+        mask_save = fg_and_unblocked_bg_norm[...,2] < blocked_z_value # those in the cam view
+        fg_bg_to_save = fg_and_unblocked_bg_norm[mask_save][None]
+        # fg_and_unblocked_bg_norm.shape, fg_bg_to_save.shape -> (torch.Size([1, 75512, 3]), torch.Size([1, 66074, 3]))
+
+        self.register_buffer('verts', fg_bg_to_save[0])
+
+        # uv coords: maybe can directly take their (x,y) coord as uv!!! genius
+        
+        min_xy = torch.tensor([fg_and_unblocked_bg_norm[...,0].min(), fg_and_unblocked_bg_norm[...,1].min()]).to(fg_bg_to_save.device)
+        max_xy = torch.tensor([fg_and_unblocked_bg_norm[...,0].max(), fg_and_unblocked_bg_norm[...,1].max()]).to(fg_bg_to_save.device)
+        
+        uv_from_xy = 2 * (fg_bg_to_save[...,:2] - min_xy) / (max_xy - min_xy) - 1 # shape: torch.Size([1, 66074, 2])
+        self.register_buffer('raw_uvcoords', uv_from_xy)
 
         return 
     
