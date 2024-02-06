@@ -216,7 +216,7 @@ def parse_comma_separated_list(s):
 @click.option('--num_gaussians', help='Number of gaussian models in the gaussian bank', metavar='INT', type=click.IntRange(min=1), default=500, required=False, show_default=True)
 @click.option('--optimize_gaussians', help='Optimize gaussian attributes of gaussian models in generator', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--init_from_the_same_canonical', help='Init from the same gaussian model or different gaussian models regressed from images in generator', metavar='BOOL',  type=bool, required=False, default=False)
-@click.option('--template_model', help='Type of template model as canonical geometry', metavar='STR',  type=click.Choice(['3DMM', 'DECA', 'DECA_splatter_v1', 'DECA_splatter_v2']), required=False, default='3DMM')
+@click.option('--template_model', help='Type of template model as canonical geometry', metavar='STR',  type=click.Choice(['3DMM', 'DECA', 'DECA_splatter_v1', 'DECA_splatter_v2', 'DECA_splatter_v3']), required=False, default='3DMM')
 
 # GS bg
 @click.option('--real_bg', help='Enable real background generation in generator', metavar='BOOL',  type=bool, required=False, default=True)
@@ -325,7 +325,10 @@ def main(**kwargs):
     # c.G_kwargs.class_name = 'training.triplane_next3d_multiple_gaussian.TriPlaneGenerator'
     c.G_kwargs.class_name = 'training.triplane_next3d_offset_gaussian.TriPlaneGenerator'
     if opts.real_bg:
-        if 'DECA_splatter' in opts.template_model:
+        if opts.template_model in ['DECA_splatter_v3']:
+            c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_DECA_splatter_v3.TriPlaneGenerator'
+            c.G_kwargs.splatter_method = opts.template_model[-2:]
+        elif opts.template_model in ['DECA_splatter_v1', 'DECA_splatter_v2']:
             c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_DECA_splatter.TriPlaneGenerator'
             c.G_kwargs.splatter_method = opts.template_model[-2:]
         elif opts.template_model=='DECA':
