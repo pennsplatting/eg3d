@@ -256,9 +256,9 @@ class TriPlaneGenerator(torch.nn.Module):
         
         self.splatter_method = splatter_method
        
-        assert self.splatter_method =='v3' # ("Invalid init method for deca splatter img. Must v3")
+        assert self.splatter_method in ['v3', 'v4'] # ("Invalid init method for deca splatter img. Must v3")
         self.load_face_model_DECA_splatter_v3()
-      
+        
         ### -------- DECA face model [end] --------
         
         ### -------- gaussian splatting render --------
@@ -538,20 +538,9 @@ class TriPlaneGenerator(torch.nn.Module):
         self.register_buffer('verts', verts_norm)
         
         return 
-
-
-    def load_face_model_DECA_splatter_v3(self):
     
-        ## on the fly create norm verts
-        ply_filename = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz_face_centers.ply'
-        plydata = PlyData.read(ply_filename)
-        face_center_verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
-
-        ### normalize to eg3d
-        face_center_verts_norm = face_center_verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
-        face_center_verts_norm = torch.tensor(face_center_verts_norm, dtype=torch.float, device='cuda')
-
-        ### create bg points
+    def create_splatter_bg(self):
+        
         intrisics = torch.tensor([[[4.2647, 0.0000, 0.5000],
          [0.0000, 4.2647, 0.5000],
          [0.0000, 0.0000, 1.0000]]]) # same as FFHQ dataset intrinsic. TODO: generalize to other datasets later
@@ -562,17 +551,49 @@ class TriPlaneGenerator(torch.nn.Module):
         ## reuse the depth & res definition for bg gaussian, but they are actually for splatter image
         splatter_resolution = self.bg_resolution
         bg_depth = self.bg_depth # this is not the actual depth since they are either on the sphere or on the half-head plane, but can be seen as a scale factor of the h & w of the bg plane.
-        target_bg_z_value = -0.1 # the z-value of plane that intersecting the head
-        self.target_bg_z_value = target_bg_z_value
+        self.target_bg_z_value = -0.1 # the z-value of plane that intersecting the head
+
         
         ray_origins, ray_directions = self.ray_sampler(c2w, intrisics, splatter_resolution)
         
         bg_verts = ray_origins + ray_directions * bg_depth # already in eg3d rendering space
-        bg_verts = bg_verts.to(device='cuda')
+        # bg_verts = bg_verts.to(device='cuda')
+        return bg_verts.to(device='cuda')
+
+
+
+    def load_face_model_DECA_splatter_v3(self):
+
+        if self.splatter_method == 'v3':
+            # self.load_face_model_DECA_splatter_v3()
+            
+            ## on the fly create norm verts
+            ply_filename = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz_face_centers.ply'
+            plydata = PlyData.read(ply_filename)
+            face_center_verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+
+            ### normalize to eg3d
+            face_center_verts_norm = face_center_verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+            fg_verts_norm = torch.tensor(face_center_verts_norm, dtype=torch.float, device='cuda')
+            
+        elif self.splatter_method == 'v4':
+            # self.load_face_model_DECA_splatter_v4()
+    
+            ht_obj_path = '/home/xuyimeng/Data/DECA/head_template_27957_eg3d_space3.obj'
+            verts, uv_verts_v4, _faces, _uv_faces  = load_obj(ht_obj_path)
+            
+            ### normalize to eg3d
+            verts_norm = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+            fg_verts_norm = torch.tensor(verts_norm, dtype=torch.float, device='cuda')
+            
+    
+        verts = fg_verts_norm
+        
+        ### create bg points
+        bg_verts = self.create_splatter_bg()
 
         # combine face model and bg parts
         ## remove the bg verts: those inside the range of the face model
-        verts = face_center_verts_norm
         x_min, x_max = verts[...,0].min(), verts[...,0].max()
         y_min, y_max = verts[...,1].min(), verts[...,1].max()
         z_min, z_max = verts[...,2].min(), verts[...,2].max()
@@ -586,7 +607,7 @@ class TriPlaneGenerator(torch.nn.Module):
         bg_verts_unblocked_z = torch.where( 
             blocked_mask, # cond
             blocked_z_value , # if true, discard
-            target_bg_z_value # if false
+            self.target_bg_z_value # if false
         )
         
         
@@ -594,15 +615,15 @@ class TriPlaneGenerator(torch.nn.Module):
         
         ## remove the fg points: those are behind the image plane
         
-        mask_fg = (face_center_verts_norm[..., 2] < target_bg_z_value) # those behind the image plane
+        mask_fg = (fg_verts_norm[..., 2] < self.target_bg_z_value) # those behind the image plane
 
         fg_verts_unblocked_z = torch.where(
             mask_fg, # cond
             blocked_z_value , # if true, discard
-            face_center_verts_norm[...,2]# if false
+            fg_verts_norm[...,2]# if false
         )
 
-        fg_verts_unblocked_norm = torch.cat([face_center_verts_norm[...,:2],fg_verts_unblocked_z[...,None]], dim=-1)
+        fg_verts_unblocked_norm = torch.cat([fg_verts_norm[...,:2],fg_verts_unblocked_z[...,None]], dim=-1)
         
         ## combine the fg bg verts
         
@@ -624,25 +645,36 @@ class TriPlaneGenerator(torch.nn.Module):
         self.register_buffer('verts', fg_save_verts)
         self.register_buffer('bg_verts', bg_save_verts)
 
-        
+
         ## UV: separate for fg and bg
         ### fg UV
-        obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
-        ### DECA-standard version load_obj
-        _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
-        
-        faces = faces[None, ...]
-        uvfaces = uvfaces[None, ...]
-        uvcoords = uvcoords[None, ...]
+        if self.splatter_method == 'v3':
+            obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
+            ### DECA-standard version load_obj
+            _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
+            
+            faces = faces[None, ...]
+            uvfaces = uvfaces[None, ...]
+            uvcoords = uvcoords[None, ...]
 
-        uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
-        face_uvcoords = face_vertices(uvcoords, uvfaces)
-        face_center_verts_uv = face_uvcoords.mean(dim=-2)
+            uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
+            face_uvcoords = face_vertices(uvcoords, uvfaces)
+            face_center_verts_uv = face_uvcoords.mean(dim=-2)
+            
+            #### filter fg save
+            face_center_verts_uv = face_center_verts_uv.to(fg_save_mask.device)
+            face_center_verts_uv = face_center_verts_uv[fg_save_mask[None]]
+            self.register_buffer('raw_uvcoords', face_center_verts_uv)
+
+        elif self.splatter_method == 'v4':
+            uvcoords = uv_verts_v4[None, ...]
+            uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
+
+            #### filter fg save
+            uvcoords = uvcoords.to(fg_save_mask.device)
+            uvcoords = uvcoords[fg_save_mask[None]]
+            self.register_buffer('raw_uvcoords', uvcoords)
         
-        #### filter fg save
-        face_center_verts_uv = face_center_verts_uv.to(fg_save_mask.device)
-        face_center_verts_uv = face_center_verts_uv[fg_save_mask[None]]
-        self.register_buffer('raw_uvcoords', face_center_verts_uv)
         
         ### bg UV
         min_xy = torch.tensor([bg_verts_unblocked[...,0].min(), bg_verts_unblocked[...,1].min()]).to(fg_bg_to_save.device)
@@ -653,8 +685,9 @@ class TriPlaneGenerator(torch.nn.Module):
         # st()
         self.register_buffer('bg_uvcoord', bg_uvcoord_save[None])
 
-
         return 
+    
+        
     
     def create_uv_coordinates(self, resolution):
         # Create a grid of coordinates
