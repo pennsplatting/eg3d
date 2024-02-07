@@ -21,7 +21,7 @@ import numpy as np
 import scipy.interpolate
 import torch
 from tqdm import tqdm
-import mrcfile
+# import mrcfile
 
 import legacy
 
@@ -188,13 +188,17 @@ def gen_interp_video(G, mp4: str, seeds, shuffle_seed=None, w_frames=60*4, kind=
                     sigmas[:, :, :pad] = 0
                     sigmas[:, :, -pad:] = 0
 
-                    output_ply = True
-                    if output_ply:
-                        from shape_utils import convert_sdf_samples_to_ply
-                        convert_sdf_samples_to_ply(np.transpose(sigmas, (2, 1, 0)), [0, 0, 0], 1, os.path.join(outdir, f'{frame_idx:04d}_shape.ply'), level=10)
-                    else: # output mrc
-                        with mrcfile.new_mmap(outdir + f'{frame_idx:04d}_shape.mrc', overwrite=True, shape=sigmas.shape, mrc_mode=2) as mrc:
-                            mrc.data[:] = sigmas
+                    
+                    # output_ply = True
+                    # if output_ply:
+                    #     from shape_utils import convert_sdf_samples_to_ply
+                    #     convert_sdf_samples_to_ply(np.transpose(sigmas, (2, 1, 0)), [0, 0, 0], 1, os.path.join(outdir, f'{frame_idx:04d}_shape.ply'), level=10)
+                    # else: # output mrc
+                    #     with mrcfile.new_mmap(outdir + f'{frame_idx:04d}_shape.mrc', overwrite=True, shape=sigmas.shape, mrc_mode=2) as mrc:
+                    #         mrc.data[:] = sigmas
+                    
+                    from shape_utils import convert_sdf_samples_to_ply
+                    convert_sdf_samples_to_ply(np.transpose(sigmas, (2, 1, 0)), [0, 0, 0], 1, os.path.join(outdir, f'{frame_idx:04d}_shape.ply'), level=10)
 
         video_out.append_data(layout_grid(torch.stack(imgs), grid_w=grid_w, grid_h=grid_h))
     video_out.close()

@@ -686,7 +686,6 @@ def training_loop(
                 out = [G_ema(z=z, c=c, noise_mode='const', gs_fname_batch=os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}/b{i:03d}')) for i, (z, c) in enumerate(zip(grid_z, grid_c))] # len(grid_z)=30, but each is a batch of 4. Total=120.
             
             images = torch.cat([o['image'].cpu() for o in out]).detach().numpy()
-            # images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
             images_mask = torch.cat([o['image_mask'].cpu() for o in out]).detach().numpy()
             # images_real = torch.cat([o['image_real'].cpu() for o in out]).detach().numpy() # FIXME: init with gt texture for debug
 
@@ -698,6 +697,16 @@ def training_loop(
                 save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=rgb_drange, grid_size=grid_size)
             save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[0, 1], grid_size=grid_size)
             # save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[0,1], grid_size=grid_size)
+
+            if G_ema.render_fg_bg_separately:
+                images_fg = torch.cat([o['image_fg'].cpu() for o in out]).detach().numpy()
+                images_mask_fg = torch.cat([o['image_mask_fg'].cpu() for o in out]).detach().numpy()
+                images_bg = torch.cat([o['image_bg'].cpu() for o in out]).detach().numpy()
+                images_mask_bg = torch.cat([o['image_mask_bg'].cpu() for o in out]).detach().numpy()
+                save_image_grid(images_fg, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_fg.png'), drange=rgb_drange, grid_size=grid_size)
+                save_image_grid(images_mask_fg, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_fg_mask.png'), drange=[0, 1], grid_size=grid_size)
+                save_image_grid(images_bg, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_bg.png'), drange=rgb_drange, grid_size=grid_size)
+                save_image_grid(images_mask_bg, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_bg_mask.png'), drange=[0, 1], grid_size=grid_size)
             
             save_override_color = getattr(G_ema, 'use_colors_precomp')
             

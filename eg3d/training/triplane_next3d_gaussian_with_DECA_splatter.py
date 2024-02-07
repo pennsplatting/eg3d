@@ -67,10 +67,6 @@ def load_mesh_with_colors(file_path):
 
     return vertices, vertex_colors
 
-def load_real_texture(file_path, device='cuda'):
-    img = cv2.imread(file_path)
-    img = cv2.cvtColor(img,cv2.COLOR_BGR2RGB) / 255.0 # Normalize to [0, 1]
-    return torch.tensor(img, dtype=torch.float32, device=device).permute(2,0,1).unsqueeze(0)
 
 def print_grad(name, grad):
     print(f"{name}:")
@@ -209,13 +205,13 @@ class TriPlaneGenerator(torch.nn.Module):
         num_gaussians,              # Number of gaussian bases in the bank.
         optimize_gaussians, 
         init_from_the_same_canonical, 
+        splatter_method,
         no_activation_in_decoder,
         bg_resolution, 
         bg_depth,
         low_res_training,
         render_fg_bg_separately,
         regularize_fg_opacity,
-        test_texture,
         sh_degree           = 3,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         text_decoder_kwargs = {},   # GS TextureDecoder
@@ -233,10 +229,18 @@ class TriPlaneGenerator(torch.nn.Module):
         self.img_channels=img_channels
         self.renderer = ImportanceRenderer()
         self.ray_sampler = RaySampler()
-        self.planes_channels_bg = 32
+        
+        ### w/ bg
+        # self.planes_channels_bg = 32
+        # assert self.planes_channels_bg > 0
+        
+        ### w/o bg
+        self.planes_channels_bg = 0
+        
         self.planes_channels_uv = 32*3
-        assert self.planes_channels_bg > 0
         self.planes_channels = self.planes_channels_uv + self.planes_channels_bg
+    
+        
         self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=256, img_channels=self.planes_channels, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
         self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
         self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
@@ -256,9 +260,16 @@ class TriPlaneGenerator(torch.nn.Module):
         ### -------- 3dmm face model [end] --------
         
         ### -------- DECA face model --------
-        # self.load_face_model_DECA()
-        self.load_face_model_DECA_face_centers()
-        self.test_texture = test_texture
+        self.bg_resolution = bg_resolution
+        self.bg_depth = bg_depth
+        
+        self.splatter_method = splatter_method
+        if self.splatter_method =='v1':
+            self.load_face_model_DECA_splatter_v1()
+        elif self.splatter_method =='v2':
+            self.load_face_model_DECA_splatter_v2()
+        else:
+            assert ValueError("Invalid init method for deca splatter img")
         
         ### -------- DECA face model [end] --------
         
@@ -354,15 +365,15 @@ class TriPlaneGenerator(torch.nn.Module):
         # all the following things must be executed after "self->keep_only_front_face_UV()"
         
         # bg gaussian
-        self.bg_resolution = bg_resolution
-        bg_verts = torch.rand([self.bg_resolution * self.bg_resolution, 3]).to(self.verts.device) - 0.5
-        self.bg_verts = bg_verts
+        # self.bg_resolution = bg_resolution
+        # bg_verts = torch.rand([self.bg_resolution * self.bg_resolution, 3]).to(self.verts.device) - 0.5
+        # self.bg_verts = bg_verts
         # self.bg_verts = torch.empty(0).to(self.verts.device)
-        self.bg_depth = bg_depth
+        # self.bg_depth = bg_depth
         
     
-        uv_size = (self.bg_resolution, self.bg_resolution)
-        self.bg_uvcoord = self.create_uniform_uv_coordinates(uv_size).to(device='cuda') # in range [-1,1]
+        # uv_size = (self.bg_resolution, self.bg_resolution)
+        # self.bg_uvcoord = self.create_uniform_uv_coordinates(uv_size).to(device='cuda') # in range [-1,1]
       
 
         self.decode_before_gridsample = True
@@ -377,16 +388,16 @@ class TriPlaneGenerator(torch.nn.Module):
             if self.text_decoder_class == 'TextureDecoder_allAttributes':
                 text_decoder_options={'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0}
                 text_decoder_options.update(text_decoder_kwargs)
-                bg_decoder_options = {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0}
-                bg_decoder_options.update(bg_decoder_kwargs)
+                # bg_decoder_options = {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0}
+                # bg_decoder_options.update(bg_decoder_kwargs)
                 
                 if no_activation_in_decoder:
                     self.text_decoder = TextureDecoder_allAttributes_noActivations(self.planes_channels_uv, text_decoder_options)
-                    self.bg_decoder = TextureDecoder_allAttributes_noActivations(self.planes_channels_bg, bg_decoder_options)
+                    # self.bg_decoder = TextureDecoder_allAttributes_noActivations(self.planes_channels_bg, bg_decoder_options)
                 else:
     
                     self.text_decoder = TextureDecoder_allAttributes(self.planes_channels_uv, text_decoder_options)
-                    self.bg_decoder = TextureDecoder_allAttributes(self.planes_channels_bg, bg_decoder_options)
+                    # self.bg_decoder = TextureDecoder_allAttributes(self.planes_channels_bg, bg_decoder_options)
                     
             elif self.text_decoder_class == 'TextureDecoder_noSigmoid':   
                 self.text_decoder = TextureDecoder_noSigmoid(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
@@ -444,11 +455,11 @@ class TriPlaneGenerator(torch.nn.Module):
             "gs rendered image_size": self.image_size,
             # For adding BG
             'backbone output planes_channels(All)': self.planes_channels,
-            'backbone output planes_channels(Background)': self.planes_channels_bg,
-            # "bg_gaussian": self.bg_gaussian.__class__.__name__,
-            "bg_resolution": self.bg_resolution, 
-            "bg_depth": self.bg_depth,
-            "bg_decoder output attriutes": getattr(self.bg_decoder, 'options', None),
+            # # For adding Splatter
+            "splatter_method": self.splatter_method,
+            "splatter_resolution": self.bg_resolution, 
+            "splatter_depth(init scale)": self.bg_depth,
+            "splatter_z(world absolute)": self.target_bg_z_value
 
         }
         
@@ -550,40 +561,177 @@ class TriPlaneGenerator(torch.nn.Module):
         self.register_buffer('verts', verts_norm)
         
         return 
-    
-    
-        
-        
-    def load_face_model_DECA_face_centers(self):
-        # obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
-        obj_filename_original = '/root/zxy/data/head_template_27957_eg3d_space_final.obj'
-        ### DECA-standard version load_obj
-        _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
-        
-        faces = faces[None, ...]
-        uvfaces = uvfaces[None, ...]
-        uvcoords = uvcoords[None, ...]
 
-        # uv coords
-        uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
-        face_uvcoords = face_vertices(uvcoords, uvfaces)
-        face_center_verts_uv = face_uvcoords.mean(dim=-2)
-        self.register_buffer('raw_uvcoords', face_center_verts_uv)
-    
-        
-        # align the scale and directions with eg3d space
-        # ply_filename_adjusted = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz.ply'
-        ply_filename_adjusted = '/home/ritz/eg3d/eg3d/data/DECA_UV/seed0000_head_template2_xzymean125_flipxz_face_centers.ply'
-        plydata = PlyData.read(ply_filename_adjusted)
-        verts_adjusted = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
-        verts_adjusted = torch.tensor(verts_adjusted)
-        face_center_verts = face_vertices(verts_adjusted[None], faces)
-        face_center_verts = face_center_verts.mean(dim=-2)
 
-        # normalize to rendering space
+    def load_face_model_DECA_splatter_v1(self):
+    
+        # # align the scale and directions with eg3d space
+        # ply_filename_adjusted = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz_face_centers_fg_bg_depth5_norm.ply' # already normalized to rendering space
+        
+        # plydata = PlyData.read(ply_filename_adjusted)
+        # face_center_verts_norm = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+
+        # face_center_verts_norm = torch.tensor(face_center_verts_norm, dtype=torch.float, device='cuda')
+        # self.register_buffer('verts', face_center_verts_norm[0])
+        
+        ## on the fly create norm verts
+        ply_filename = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz_face_centers.ply'
+        plydata = PlyData.read(ply_filename)
+        face_center_verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+
+        ### normalize to eg3d
         face_center_verts_norm = face_center_verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
         face_center_verts_norm = torch.tensor(face_center_verts_norm, dtype=torch.float, device='cuda')
-        self.register_buffer('verts', face_center_verts_norm[0])
+
+        ### create bg points
+        intrisics = torch.tensor([[[4.2647, 0.0000, 0.5000],
+         [0.0000, 4.2647, 0.5000],
+         [0.0000, 0.0000, 1.0000]]]) # same as FFHQ dataset intrinsic. TODO: generalize to other datasets later
+        c2w = torch.eye(4)[None]
+        c2w[0,2,2] *= -1 # lookat: neg z
+        
+        # todo: make all the following as hyperparameters
+        ## reuse the depth & res definition for bg gaussian, but they are actually for splatter image
+        splatter_resolution = self.bg_resolution
+        bg_depth = self.bg_depth # this is not the actual depth since they are either on the sphere or on the half-head plane, but can be seen as a scale factor of the h & w of the bg plane.
+        target_bg_z_value = -0.1 # the z-value of plane that intersecting the head
+        self.target_bg_z_value = target_bg_z_value
+        
+        ray_origins, ray_directions = self.ray_sampler(c2w, intrisics, splatter_resolution)
+        
+        bg_verts = ray_origins + ray_directions * bg_depth # already in eg3d rendering space
+        bg_verts = bg_verts.to(device='cuda')
+
+        # combine face model and bg parts
+        ## remove the bg verts: those inside the range of the face model
+        verts = face_center_verts_norm
+        x_min, x_max = verts[...,0].min(), verts[...,0].max()
+        y_min, y_max = verts[...,1].min(), verts[...,1].max()
+        z_min, z_max = verts[...,2].min(), verts[...,2].max()
+        
+        mask_x = (bg_verts[..., 0] >= x_min) & (bg_verts[..., 0] <= x_max)
+        mask_y = (bg_verts[..., 1] >= y_min) & (bg_verts[..., 1] <= y_max)
+        blocked_mask = mask_x & mask_y
+        
+        blocked_z_value = 20 # a very large distance behind the cam, discarded later
+        
+        bg_verts_unblocked_z = torch.where( 
+            blocked_mask, # cond
+            blocked_z_value , # if true, discard
+            target_bg_z_value # if false
+        )
+        
+        
+        bg_verts_unblocked = torch.cat([bg_verts[...,:2],bg_verts_unblocked_z[...,None]], dim=-1)
+        
+        ## remove the fg points: those are behind the image plane
+        
+        mask_fg = (face_center_verts_norm[..., 2] < target_bg_z_value) # those behind the image plane
+
+        fg_verts_unblocked_z = torch.where(
+            mask_fg, # cond
+            blocked_z_value , # if true, discard
+            face_center_verts_norm[...,2]# if false
+        )
+
+        fg_verts_unblocked_norm = torch.cat([face_center_verts_norm[...,:2],fg_verts_unblocked_z[...,None]], dim=-1)
+        
+        ## combine the fg bg verts
+        
+        fg_and_unblocked_bg_norm = torch.cat([fg_verts_unblocked_norm[None], bg_verts_unblocked], dim=1)
+        print(face_center_verts_norm.shape)
+        
+        mask_save = fg_and_unblocked_bg_norm[...,2] < blocked_z_value # those in the cam view
+        fg_bg_to_save = fg_and_unblocked_bg_norm[mask_save][None]
+        # fg_and_unblocked_bg_norm.shape, fg_bg_to_save.shape -> (torch.Size([1, 75512, 3]), torch.Size([1, 66074, 3]))
+
+        self.register_buffer('verts', fg_bg_to_save[0])
+
+        # uv coords: maybe can directly take their (x,y) coord as uv!!! genius
+        
+        min_xy = torch.tensor([fg_and_unblocked_bg_norm[...,0].min(), fg_and_unblocked_bg_norm[...,1].min()]).to(fg_bg_to_save.device)
+        max_xy = torch.tensor([fg_and_unblocked_bg_norm[...,0].max(), fg_and_unblocked_bg_norm[...,1].max()]).to(fg_bg_to_save.device)
+        
+        uv_from_xy = 2 * (fg_bg_to_save[...,:2] - min_xy) / (max_xy - min_xy) - 1 # shape: torch.Size([1, 66074, 2])
+        self.register_buffer('raw_uvcoords', uv_from_xy)
+
+        return 
+    
+    def create_uv_coordinates(self, resolution):
+        # Create a grid of coordinates
+        x = torch.linspace(0, 1, resolution, dtype=torch.float32)
+        y = torch.linspace(0, 1, resolution, dtype=torch.float32)
+
+        # Create meshgrid
+        xv, yv = torch.meshgrid(x, y)
+
+        # Stack and reshape to get UV coordinates
+        uv_coordinates = torch.stack((xv, yv), dim=-1).view(-1, 2)
+
+        return uv_coordinates
+
+    
+    def load_face_model_DECA_splatter_v2(self):
+        ## verts 
+        ply_filename = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz_face_centers.ply'
+        plydata = PlyData.read(ply_filename)
+        face_center_verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+        
+        ### normalize to eg3d
+        face_center_verts_norm = face_center_verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+        face_center_verts_norm = torch.tensor(face_center_verts_norm, dtype=torch.float, device='cuda')
+
+        ### create bg points
+        intrisics = torch.tensor([[[4.2647, 0.0000, 0.5000],
+         [0.0000, 4.2647, 0.5000],
+         [0.0000, 0.0000, 1.0000]]]) # same as FFHQ dataset intrinsic. TODO: generalize to other datasets later
+        c2w = torch.eye(4)[None]
+        c2w[0,2,2] *= -1 # lookat: neg z
+        
+        # todo: make all the following as hyperparameters
+        ## reuse the depth & res definition for bg gaussian, but they are actually for splatter image
+        splatter_resolution = self.bg_resolution
+        bg_depth = self.bg_depth # this is not the actual depth since they are either on the sphere or on the half-head plane, but can be seen as a scale factor of the h & w of the bg plane.
+        target_bg_z_value = -0.1 # the z-value of plane that intersecting the head
+        self.target_bg_z_value = target_bg_z_value
+        
+        ray_origins, ray_directions = self.ray_sampler(c2w, intrisics, splatter_resolution)
+        
+        bg_verts = ray_origins + ray_directions * bg_depth # already in eg3d rendering space
+        bg_verts = bg_verts.to(device='cuda')
+        
+        ### create sphere points
+        sphere_radius = face_center_verts_norm[...,2].max() - target_bg_z_value
+        print(f"sphere_radius is {sphere_radius}")
+        xy_radii = (bg_verts[..., 0]-0)**2 + (bg_verts[..., 1]-0)**2
+   
+        blocked_mask = xy_radii <= sphere_radius**2 
+        
+        z_sqr = sphere_radius**2 - (xy_radii)
+        valid_z_sqr_value = torch.where(
+            z_sqr >= 0,
+            z_sqr,
+            0
+        )
+
+        sphere_z_value = torch.sqrt(valid_z_sqr_value) + target_bg_z_value
+        print(sphere_z_value.shape)
+        bg_verts_unblocked_z = torch.where(
+            blocked_mask, # cond
+            sphere_z_value , # if true
+            target_bg_z_value # if false
+        )
+
+        ### combine the half sphere with the bg plane
+        bg_verts_unblocked = torch.cat([bg_verts[...,:2],bg_verts_unblocked_z[...,None]], dim=-1)
+        
+        self.register_buffer('verts', bg_verts_unblocked[0])
+        
+        
+        ## uv coord
+        uv_raw = self.create_uv_coordinates(splatter_resolution)
+        uv_norm = uv_raw * 2 - 1 # map to [-1,1]
+        self.register_buffer('raw_uvcoords', uv_norm[None])
 
         return 
         
@@ -729,17 +877,15 @@ class TriPlaneGenerator(torch.nn.Module):
             # Reshape output into three 32-channel planes
             if ('UV' in self.feature_structure):
                 if self.decode_before_gridsample: # decode before grid sample
-                    if self.test_texture: # see if uv map is correct
-                        textures_gen_batch = load_real_texture("/home/ritz/eg3d/eg3d/data/DECA_UV/texture-alfw1.png").repeat(planes.shape[0],1,1,1)
-                    else:
-                        textures_gen_batch = self.text_decoder(planes[:, :self.planes_channels_uv]) # (4, 96, 256, 256) -> (4, SH, 256, 256), range [0,1]
+                    
+                    textures_gen_batch = self.text_decoder(planes[:, :self.planes_channels_uv]) # (4, 96, 256, 256) -> (4, SH, 256, 256), range [0,1]
                     textures_gen_batch = F.grid_sample(textures_gen_batch, self.raw_uvcoords.unsqueeze(0).repeat(textures_gen_batch.shape[0],1,1,1), align_corners=False) # (B, C, 1, N_pts)
 
-                    ## decode bg
-                    bg_gen_batch = self.bg_decoder(planes[:, self.planes_channels_uv:]) # (4, C, 256, 256) -> (4, C, 256, 256), range [0,1]
-                    bg_gen_batch = F.grid_sample(bg_gen_batch, self.bg_uvcoord.unsqueeze(0).repeat(bg_gen_batch.shape[0],1,1,1), align_corners=False) # (B, C, 1, N_pts)
-                    _B, _C, _H, _W = bg_gen_batch.shape
-                    bg_gen_batch = bg_gen_batch.reshape(_B, _C, 1, _H*_W)
+                    # ## decode bg
+                    # bg_gen_batch = self.bg_decoder(planes[:, self.planes_channels_uv:]) # (4, C, 256, 256) -> (4, C, 256, 256), range [0,1]
+                    # bg_gen_batch = F.grid_sample(bg_gen_batch, self.bg_uvcoord.unsqueeze(0).repeat(bg_gen_batch.shape[0],1,1,1), align_corners=False) # (B, C, 1, N_pts)
+                    # _B, _C, _H, _W = bg_gen_batch.shape
+                    # bg_gen_batch = bg_gen_batch.reshape(_B, _C, 1, _H*_W)
                         
                 else: # decode after grid sample
                     pass
@@ -763,13 +909,14 @@ class TriPlaneGenerator(torch.nn.Module):
                 opacity_image_batch_fg = []
             
 
-            bg_gaussian = GaussianModel_BG(self.sh_degree, self.bg_verts)
+            # bg_gaussian = GaussianModel_BG(self.sh_degree, self.bg_verts)
             
             
             # to save ply during G_ema eval
             _xyz_offset = None
             ## TODO: can gaussiam splatting run batch in parallel?
-            for _gs_i, _cam2world_matrix, _intrinsics, textures_gen, bg_gen in zip(range(len(textures_gen_batch)), cam2world_matrix, intrinsics, textures_gen_batch, bg_gen_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
+            # for _gs_i, _cam2world_matrix, _intrinsics, textures_gen, bg_gen in zip(range(len(textures_gen_batch)), cam2world_matrix, intrinsics, textures_gen_batch, bg_gen_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
+            for _gs_i, _cam2world_matrix, _intrinsics, textures_gen in zip(range(len(textures_gen_batch)), cam2world_matrix, intrinsics, textures_gen_batch ): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
                 # randomly select a new gaussian for each rendering
                 # current_gaussian = self.get_a_gaussian()
                 current_gaussian_verts = self.get_a_gaussian_verts()
@@ -777,60 +924,60 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
                 
-                # update bg gaussian
-                ## -- bg update starts -- 
-                start_dim = 0
-                _C, _H, bg_gen.shape
-                textures = bg_gen[None] # [1, C, 256, 256]
+                # # update bg gaussian
+                # ## -- bg update starts -- 
+                # start_dim = 0
+                # _C, _H, bg_gen.shape
+                # textures = bg_gen[None] # [1, C, 256, 256]
                 
-                if self.bg_decoder.options['gen_rgb']:
-                    _rgb = textures[0,start_dim:start_dim+3,0].permute(1,0)
-                    start_dim += 3
-                    # self.bg_gaussian.update_rgb_textures(_rgb)
-                    bg_gaussian.update_rgb_textures(_rgb)
+                # if self.bg_decoder.options['gen_rgb']:
+                #     _rgb = textures[0,start_dim:start_dim+3,0].permute(1,0)
+                #     start_dim += 3
+                #     # self.bg_gaussian.update_rgb_textures(_rgb)
+                #     bg_gaussian.update_rgb_textures(_rgb)
                 
-                if self.bg_decoder.options['gen_sh']:
-                    _sh = textures[0,start_dim:start_dim+3,0].permute(1,0)
-                    start_dim += 3
-                    # self.bg_gaussian.update_sh_texture(_sh)
-                    bg_gaussian.update_sh_texture(_sh)
+                # if self.bg_decoder.options['gen_sh']:
+                #     _sh = textures[0,start_dim:start_dim+3,0].permute(1,0)
+                #     start_dim += 3
+                #     # self.bg_gaussian.update_sh_texture(_sh)
+                #     bg_gaussian.update_sh_texture(_sh)
                 
-                if self.bg_decoder.options['gen_opacity']:
-                    _opacity = textures[0,start_dim:start_dim+1,0].permute(1,0) # should be no adjustment for sigmoid
-                    start_dim += 1
-                    # self.bg_gaussian.update_opacity(_opacity)
-                    bg_gaussian.update_opacity(_opacity)
+                # if self.bg_decoder.options['gen_opacity']:
+                #     _opacity = textures[0,start_dim:start_dim+1,0].permute(1,0) # should be no adjustment for sigmoid
+                #     start_dim += 1
+                #     # self.bg_gaussian.update_opacity(_opacity)
+                #     bg_gaussian.update_opacity(_opacity)
                 
-                if self.bg_decoder.options['gen_scaling']:
-                    _scaling = textures[0,start_dim:start_dim+3,0].permute(1,0)
-                    # self.bg_gaussian.update_scaling(_scaling, max_s = self.bg_decoder.options['max_scaling'], min_s = self.bg_decoder.options['min_scaling'])
-                    bg_gaussian.update_scaling(_scaling, max_s = self.bg_decoder.options['max_scaling'], min_s = self.bg_decoder.options['min_scaling'])
-                    start_dim += 3
+                # if self.bg_decoder.options['gen_scaling']:
+                #     _scaling = textures[0,start_dim:start_dim+3,0].permute(1,0)
+                #     # self.bg_gaussian.update_scaling(_scaling, max_s = self.bg_decoder.options['max_scaling'], min_s = self.bg_decoder.options['min_scaling'])
+                #     bg_gaussian.update_scaling(_scaling, max_s = self.bg_decoder.options['max_scaling'], min_s = self.bg_decoder.options['min_scaling'])
+                #     start_dim += 3
                     
-                if self.bg_decoder.options['gen_rotation']:
-                    _rotation = textures[0,start_dim:start_dim+4,0].permute(1,0)
-                    # self.bg_gaussian.update_rotation(_rotation)
-                    bg_gaussian.update_rotation(_rotation)
-                    start_dim += 4
+                # if self.bg_decoder.options['gen_rotation']:
+                #     _rotation = textures[0,start_dim:start_dim+4,0].permute(1,0)
+                #     # self.bg_gaussian.update_rotation(_rotation)
+                #     bg_gaussian.update_rotation(_rotation)
+                #     start_dim += 4
                 
-                ## update bg gaussian _xyz according to c2w
-                # current_gaussian._xyz[..., -1].min() -> tensor(0.0047, device='cuda:0'): z_far
-                # current_gaussian._xyz[..., -1].max() -> tensor(0.2887, device='cuda:0'): z_near
-                # under world coord, smaller (more negative) is behind the face
-                # WARN: do not move the position of this line, since the attributes have an order
-                ray_origins, ray_directions = self.ray_sampler(_cam2world_matrix[None], _intrinsics[None], self.bg_resolution)
-                bg_xyz = (ray_origins + ray_directions * self.bg_depth)[0]
+                # ## update bg gaussian _xyz according to c2w
+                # # current_gaussian._xyz[..., -1].min() -> tensor(0.0047, device='cuda:0'): z_far
+                # # current_gaussian._xyz[..., -1].max() -> tensor(0.2887, device='cuda:0'): z_near
+                # # under world coord, smaller (more negative) is behind the face
+                # # WARN: do not move the position of this line, since the attributes have an order
+                # ray_origins, ray_directions = self.ray_sampler(_cam2world_matrix[None], _intrinsics[None], self.bg_resolution)
+                # bg_xyz = (ray_origins + ray_directions * self.bg_depth)[0]
                 
-                if self.bg_decoder.options['gen_xyz_offset']:
-                    _xyz_offset = textures[0,start_dim:start_dim+3,0].permute(1,0)
-                    bg_xyz += _xyz_offset
-                    start_dim += 3
+                # if self.bg_decoder.options['gen_xyz_offset']:
+                #     _xyz_offset = textures[0,start_dim:start_dim+3,0].permute(1,0)
+                #     bg_xyz += _xyz_offset
+                #     start_dim += 3
                     
-                bg_gaussian.update_xyz(bg_xyz)
+                # bg_gaussian.update_xyz(bg_xyz)
             
-                assert start_dim==textures.shape[1]
+                # assert start_dim==textures.shape[1]
                 
-                ## -- bg update finish --
+                # ## -- bg update finish --
                     
 
                 # get UV features
@@ -845,9 +992,6 @@ class TriPlaneGenerator(torch.nn.Module):
                 if self.use_colors_precomp:
                     override_color = textures[0,:3,0].permute(1,0) # override_color -> [Npts, 3], range in [0,1]
                     current_gaussian.update_rgb_textures(override_color)
-                elif self.test_texture:
-                    override_color = None
-                    current_gaussian.update_rgb_textures(textures[0,:,0].permute(1,0))
                 else:
                     override_color = None
                     if self.text_decoder_class == 'TextureDecoder_allAttributes':
@@ -892,22 +1036,20 @@ class TriPlaneGenerator(torch.nn.Module):
                     else:
                         current_gaussian.update_textures(textures)
                 
-                # save gs ply during G_ema eval
-                if gs_fname_batch is not None and _gs_i==0:
-                    gs_fname = f'{gs_fname_batch}_{_gs_i:02d}.ply'
-                    # combine bg_gaussian and current gaussian
-                    # current_gaussian_with_bg = combine_list_of_gs([current_gaussian, self.bg_gaussian])
-                    current_gaussian_with_bg = combine_list_of_gs([current_gaussian, bg_gaussian])
-                    if self.test_texture:
-                        current_gaussian_with_bg.save_ply(gs_fname, save_override_color=True)
-                    else:
-                        current_gaussian_with_bg.save_ply(gs_fname)
+                # FIXME: save gaussian without bg gaussian
+                # # save gs ply during G_ema eval
+                # if gs_fname_batch is not None and _gs_i==0:
+                #     gs_fname = f'{gs_fname_batch}_{_gs_i:02d}.ply'
+                #     # combine bg_gaussian and current gaussian
+                #     # current_gaussian_with_bg = combine_list_of_gs([current_gaussian, self.bg_gaussian])
+                #     current_gaussian_with_bg = combine_list_of_gs([current_gaussian, bg_gaussian])
+                #     current_gaussian_with_bg.save_ply(gs_fname)
                     
                 
-                # res = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
+                res = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
                 # res = gs_render(self.viewpoint_camera, self.bg_gaussian, None, self.background, override_color=override_color)
                 # res = gs_render_with_bg(self.viewpoint_camera, [current_gaussian, self.bg_gaussian], None, self.background, override_color=override_color)
-                res = gs_render_with_bg(self.viewpoint_camera, [current_gaussian, bg_gaussian], None, self.background, override_color=override_color)
+                # res = gs_render_with_bg(self.viewpoint_camera, [current_gaussian, bg_gaussian], None, self.background, override_color=override_color)
                 
                 _rgb_image = res["render"]
                 _alpha_image = 1 - res["alpha"]
@@ -918,30 +1060,30 @@ class TriPlaneGenerator(torch.nn.Module):
                 alpha_image_batch.append(_alpha_image[None])
               
               
-                ## render foreground and bg separately
-                if self.render_fg_bg_separately:
+                # ## render foreground and bg separately
+                # if self.render_fg_bg_separately:
     
-                    res_fg = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
-                    _rgb_image_fg = res_fg["render"]
-                    _alpha_image_fg = 1 - res_fg["alpha"]
-                    rgb_image_batch_fg.append(_rgb_image_fg[None])
-                    alpha_image_batch_fg.append(_alpha_image_fg[None])
+                #     res_fg = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
+                #     _rgb_image_fg = res_fg["render"]
+                #     _alpha_image_fg = 1 - res_fg["alpha"]
+                #     rgb_image_batch_fg.append(_rgb_image_fg[None])
+                #     alpha_image_batch_fg.append(_alpha_image_fg[None])
                     
-                    res_bg = gs_render(self.viewpoint_camera, bg_gaussian, None, self.background, override_color=override_color)
-                    _rgb_image_bg = res_bg["render"]
-                    _alpha_image_bg = 1 - res_bg["alpha"]
-                    rgb_image_batch_bg.append(_rgb_image_bg[None])
-                    alpha_image_batch_bg.append(_alpha_image_bg[None])
+                #     res_bg = gs_render(self.viewpoint_camera, bg_gaussian, None, self.background, override_color=override_color)
+                #     _rgb_image_bg = res_bg["render"]
+                #     _alpha_image_bg = 1 - res_bg["alpha"]
+                #     rgb_image_batch_bg.append(_rgb_image_bg[None])
+                #     alpha_image_batch_bg.append(_alpha_image_bg[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
             real_image = None
             
-            if self.render_fg_bg_separately:
-                rgb_image_fg = torch.cat(rgb_image_batch_fg) # [4, 3, gs_res, gs_res]
-                alpha_image_fg = torch.cat(alpha_image_batch_fg)
-                rgb_image_bg = torch.cat(rgb_image_batch_bg) # [4, 3, gs_res, gs_res]
-                alpha_image_bg = torch.cat(alpha_image_batch_bg)
+            # if self.render_fg_bg_separately:
+            #     rgb_image_fg = torch.cat(rgb_image_batch_fg) # [4, 3, gs_res, gs_res]
+            #     alpha_image_fg = torch.cat(alpha_image_batch_fg)
+            #     rgb_image_bg = torch.cat(rgb_image_batch_bg) # [4, 3, gs_res, gs_res]
+            #     alpha_image_bg = torch.cat(alpha_image_batch_bg)
                 
             if self.regularize_fg_opacity:
                 opacity_image_fg = torch.cat(opacity_image_batch_fg) # [4, Npts, 1]
@@ -952,9 +1094,9 @@ class TriPlaneGenerator(torch.nn.Module):
                 # rgb_image = (rgb_image / rgb_image.max() - 0.5) * 2
                 rgb_image = (rgb_image - 0.5) * 2
                 # print(f'rgb_image range: {rgb_image.min()}~{rgb_image.max()}')
-                if self.render_fg_bg_separately:
-                    rgb_image_fg = (rgb_image_fg - 0.5) * 2
-                    rgb_image_bg = (rgb_image_bg - 0.5) * 2
+                # if self.render_fg_bg_separately:
+                #     rgb_image_fg = (rgb_image_fg - 0.5) * 2
+                #     rgb_image_bg = (rgb_image_bg - 0.5) * 2
     
             
             ## TODO: the below superresolution shall be kept?
@@ -974,12 +1116,12 @@ class TriPlaneGenerator(torch.nn.Module):
 
         synthesis_out = {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image}
         
-        if self.render_fg_bg_separately:
-            # return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image,
-            #         'image_fg': rgb_image_fg, 'image_mask_fg': alpha_image_fg, 'image_bg': rgb_image_bg, 'image_mask_bg': alpha_image_bg}
-            synthesis_out.update({
-                'image_fg': rgb_image_fg, 'image_mask_fg': alpha_image_fg, 'image_bg': rgb_image_bg, 'image_mask_bg': alpha_image_bg
-                })
+        # if self.render_fg_bg_separately:
+        #     # return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image,
+        #     #         'image_fg': rgb_image_fg, 'image_mask_fg': alpha_image_fg, 'image_bg': rgb_image_bg, 'image_mask_bg': alpha_image_bg}
+        #     synthesis_out.update({
+        #         'image_fg': rgb_image_fg, 'image_mask_fg': alpha_image_fg, 'image_bg': rgb_image_bg, 'image_mask_bg': alpha_image_bg
+        #         })
         if self.regularize_fg_opacity:
             synthesis_out.update({
                 'opacity_image_fg': opacity_image_fg

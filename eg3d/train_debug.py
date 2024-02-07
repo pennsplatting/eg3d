@@ -30,6 +30,7 @@ from metrics import metric_main
 from torch_utils import training_stats
 from torch_utils import custom_ops
 
+
 #----------------------------------------------------------------------------
 
 def subprocess_fn(rank, c, temp_dir):
@@ -215,10 +216,10 @@ def parse_comma_separated_list(s):
 @click.option('--num_gaussians', help='Number of gaussian models in the gaussian bank', metavar='INT', type=click.IntRange(min=1), default=500, required=False, show_default=True)
 @click.option('--optimize_gaussians', help='Optimize gaussian attributes of gaussian models in generator', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--init_from_the_same_canonical', help='Init from the same gaussian model or different gaussian models regressed from images in generator', metavar='BOOL',  type=bool, required=False, default=False)
-@click.option('--template_model', help='Type of template model as canonical geometry', metavar='STR',  type=click.Choice(['3DMM', 'FLAME', 'DECA']), required=False, default='3DMM')
+@click.option('--template_model', help='Type of template model as canonical geometry', metavar='STR',  type=click.Choice(['3DMM', 'DECA', 'DECA_splatter_v1', 'DECA_splatter_v2', 'DECA_splatter_v3', 'DECA_splatter_v4']), required=False, default='3DMM')
 
 # GS bg
-@click.option('--real_bg', help='Enable real background generation in generator', metavar='BOOL',  type=bool, required=False, default=False)
+@click.option('--real_bg', help='Enable real background generation in generator', metavar='BOOL',  type=bool, required=False, default=True)
 # GS bg decoder options
 @click.option('--bg_gen_rgb', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
 @click.option('--bg_gen_sh', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
@@ -233,10 +234,19 @@ def parse_comma_separated_list(s):
 @click.option('--bg_scale_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
 @click.option('--bg_resolution', help='Resolution of num gaussians used to render bg', metavar='INT', type=click.IntRange(min=1), default=128, required=False, show_default=True)
 @click.option('--bg_depth', help='How many (ray_origin + ray_dir * bg_depth) is used to control the distance of bg gaussian to image plane', metavar='INT', type=click.IntRange(min=1), default=5, required=False, show_default=True)
+
+# GS decoder (common for text and bg)
+@click.option('--xyz_offset_act', help='Type of xyz_offset_act in gs attributes decoder', metavar='STR',  type=click.Choice(['normalize', 'clamp']), required=False, default='clamp')
+
 # GS save viz
-@click.option('--save_gaussian_ply', help='Enable gaussian ply saving during image saving ticks', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--save_gaussian_ply', help='Enable gaussian ply saving during image saving ticks', metavar='BOOL',  type=bool, required=False, default=False)
 # GS rendering resolution during training
 @click.option('--low_res_training', help='Enable low_res gaussian rendering during training', metavar='BOOL',  type=bool, required=False, default=False)
+@click.option('--render_fg_bg_separately', help='render_fg_bg_separately during image saving ticks', metavar='BOOL',  type=bool, required=False, default=False)
+# Loss for GS foregroud supervision
+@click.option('--opacity_reg',    help='Opacity regularization for GS foreground strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=0, required=False, show_default=True)
+@click.option('--opacity_ref_value',    help='Desired opacity value for GS foreground.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
+@click.option('--opacity_loss_choice', help='Type of opacity loss for GS foreground.', metavar='STR',  type=click.Choice(['l1', 'smooth_l1', 'l2']), required=False, default='l1', show_default=True)
 @click.option('--test_texture', help='Test UV coordinates', metavar='BOOL',  type=bool, required=False, default=False)
 
 
@@ -320,9 +330,15 @@ def main(**kwargs):
     # c.G_kwargs.class_name = 'training.triplane_next3d_multiple_gaussian.TriPlaneGenerator'
     c.G_kwargs.class_name = 'training.triplane_next3d_offset_gaussian.TriPlaneGenerator'
     if opts.real_bg:
-        if opts.template_model=='DECA':
+        if opts.template_model in ['DECA_splatter_v3', 'DECA_splatter_v4']:
+            c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_DECA_splatter_v3.TriPlaneGenerator'
+            c.G_kwargs.splatter_method = opts.template_model[-2:]
+        elif opts.template_model in ['DECA_splatter_v1', 'DECA_splatter_v2']:
+            c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_DECA_splatter.TriPlaneGenerator'
+            c.G_kwargs.splatter_method = opts.template_model[-2:]
+        elif opts.template_model=='DECA':
             c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_DECA.TriPlaneGenerator'
-        else:
+        elif opts.template_model=='3DMM':
             # c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_bg.TriPlaneGenerator'
             c.G_kwargs.class_name = 'training.triplane_next3d_gaussian_with_pkl.TriPlaneGenerator' # all functions are the same as with white bg, but make it pickable
     print('c.G_kwargs.class_name:', c.G_kwargs.class_name)
@@ -335,23 +351,27 @@ def main(**kwargs):
         c.D_kwargs.class_name = 'training.dual_discriminator_mask_condition.DualDiscriminator'
     c.G_kwargs.fused_modconv_default = 'inference_only' # Speed up training by using regular convolutions instead of grouped convolutions.
     ## Loss
+    c.loss_kwargs.opacity_reg = opts.opacity_reg
+    c.loss_kwargs.opacity_loss_choice = opts.opacity_loss_choice
+    c.G_kwargs.regularize_fg_opacity = opts.opacity_reg > 0
+    
     if opts.use_mask_condition:
         c.loss_kwargs.class_name='training.loss_mask_condition.StyleGAN2Loss'
-        c.loss_kwargs.reg_weight = 0
-        c.loss_kwargs.opacity_reg = 0
+        c.loss_kwargs.reg_weight = 0 # FIXME: if used later, should have a corresponding click option
+        c.loss_kwargs.opacity_reg = opts.opacity_reg
         c.loss_kwargs.use_mask = opts.use_mask_condition
     
     ## GS Texture Decoder options
     text_decoder_options = {'gen_rgb':opts.gs_gen_rgb, 'gen_sh':opts.gs_gen_sh, 'gen_opacity':opts.gs_gen_opacity, 'gen_scaling':opts.gs_gen_scaling, 'gen_rotation':opts.gs_gen_rotation, 'gen_xyz_offset':opts.gs_gen_xyz_offset,
                                                                   'max_scaling':opts.gs_max_scaling, 'min_scaling':opts.gs_min_scaling, 'xyz_offset_scale':opts.gs_xyz_offset_scale,
-                                                                  'scale_bias':opts.gs_scale_bias, 'scale_factor':opts.gs_scale_factor,}
+                                                                  'scale_bias':opts.gs_scale_bias, 'scale_factor':opts.gs_scale_factor, 'xyz_offset_act': opts.xyz_offset_act}
     c.G_kwargs.text_decoder_kwargs = text_decoder_options
     
     ## GS BG Decoder options
     if opts.real_bg:
         bg_decoder_options = {'gen_rgb':opts.bg_gen_rgb, 'gen_sh':opts.bg_gen_sh, 'gen_opacity':opts.bg_gen_opacity, 'gen_scaling':opts.bg_gen_scaling, 'gen_rotation':opts.bg_gen_rotation, 'gen_xyz_offset':opts.bg_gen_xyz_offset,
                                                                   'max_scaling':opts.bg_max_scaling, 'min_scaling':opts.bg_min_scaling, 'xyz_offset_scale':opts.bg_xyz_offset_scale,
-                                                                  'scale_bias':opts.bg_scale_bias, 'scale_factor':opts.bg_scale_factor,}
+                                                                  'scale_bias':opts.bg_scale_bias, 'scale_factor':opts.bg_scale_factor, 'xyz_offset_act': opts.xyz_offset_act}
         c.G_kwargs.bg_decoder_kwargs = bg_decoder_options
         c.G_kwargs.bg_resolution = opts.bg_resolution
         c.G_kwargs.bg_depth = opts.bg_depth
@@ -363,6 +383,7 @@ def main(**kwargs):
     c.G_kwargs.no_activation_in_decoder = opts.no_activation_in_decoder
     ## GS rendering
     c.G_kwargs.low_res_training = opts.low_res_training
+    c.G_kwargs.render_fg_bg_separately = opts.render_fg_bg_separately
     c.G_kwargs.test_texture = opts.test_texture
 
     ## GS save ply in G_ema 

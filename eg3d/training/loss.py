@@ -12,6 +12,7 @@
 
 import numpy as np
 import torch
+import torch.nn as nn
 from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import upfirdn2d
@@ -28,7 +29,8 @@ class Loss:
 #----------------------------------------------------------------------------
 
 class StyleGAN2Loss(Loss):
-    def __init__(self, device, G, D, augment_pipe=None, r1_gamma=10, style_mixing_prob=0, pl_weight=0, pl_batch_shrink=2, pl_decay=0.01, pl_no_weight_grad=False, blur_init_sigma=0, blur_fade_kimg=0, r1_gamma_init=0, r1_gamma_fade_kimg=0, neural_rendering_resolution_initial=64, neural_rendering_resolution_final=None, neural_rendering_resolution_fade_kimg=0, gpc_reg_fade_kimg=1000, gpc_reg_prob=None, dual_discrimination=False, filter_mode='antialiased'):
+    def __init__(self, device, G, D, augment_pipe=None, r1_gamma=10, style_mixing_prob=0, pl_weight=0, pl_batch_shrink=2, pl_decay=0.01, pl_no_weight_grad=False, blur_init_sigma=0, blur_fade_kimg=0, r1_gamma_init=0, r1_gamma_fade_kimg=0, neural_rendering_resolution_initial=64, neural_rendering_resolution_final=None, neural_rendering_resolution_fade_kimg=0, gpc_reg_fade_kimg=1000, gpc_reg_prob=None, dual_discrimination=False, filter_mode='antialiased',
+                 opacity_reg=0.25, opacity_ref_value=1, opacity_loss_choice='l1'):
         super().__init__()
         self.device             = device
         self.G                  = G
@@ -55,6 +57,11 @@ class StyleGAN2Loss(Loss):
         self.resample_filter = upfirdn2d.setup_filter([1,3,3,1], device=device)
         self.blur_raw_target = True
         assert self.gpc_reg_prob is None or (0 <= self.gpc_reg_prob <= 1)
+
+        self.opacity_reg = opacity_reg
+        self.opacity_ref_value = opacity_ref_value
+        self.opacity_loss_choice = opacity_loss_choice
+        
 
     def run_G(self, z, c, swapping_prob, neural_rendering_resolution, update_emas=False):
         if swapping_prob is not None:
@@ -90,6 +97,25 @@ class StyleGAN2Loss(Loss):
 
         logits = self.D(img, c, update_emas=update_emas)
         return logits
+    
+    def loss_opacity(self, opacity_pts):
+        """Inside the masked region of the texture, opacity should sum to 1.
+        Args:
+            texture_mask: (bs, 1, h, w) opacity after activation
+            opacity_map: (bs, sh, h, w)
+        returns:
+            loss: float
+        """
+        if self.opacity_loss_choice == 'l1':
+            loss_opa = torch.abs(opacity_pts - self.opacity_ref_value)
+            # loss_opa = torch.abs(torch.mean(opacity_pts, dim=-2) - 1)
+            return torch.mean(loss_opa, dim=-2)
+        elif self.opacity_loss_choice == 'smooth_l1':
+            smooth_l1_loss = nn.SmoothL1Loss()
+            ref_values = self.opacity_ref_value * torch.ones_like(opacity_pts)
+            return smooth_l1_loss(opacity_pts, ref_values)
+        else:
+            assert ValueError("Not a valid choice for opacity loss")
     
 
     # TODO: L2 loss for debug
@@ -168,7 +194,16 @@ class StyleGAN2Loss(Loss):
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits)
                 training_stats.report('Loss/G/loss', loss_Gmain)
+            
+                if self.opacity_reg > 0 and ('opacity_image_fg' in gen_img.keys()):
+                    opacity_loss = self.loss_opacity(gen_img['opacity_image_fg']).to(_gen_ws.device)
+                    training_stats.report('Loss/G/opacity_loss', opacity_loss)
+                    
             with torch.autograd.profiler.record_function('Gmain_backward'):
+                
+                if self.opacity_reg > 0 and ('opacity_image_fg' in gen_img.keys()):
+                    loss_Gmain = loss_Gmain + self.opacity_reg*opacity_loss
+                    
                 loss_Gmain.mean().mul(gain).backward()
                 
             #     ## FIXME: debug grad
