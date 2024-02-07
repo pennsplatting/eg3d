@@ -310,7 +310,7 @@ class TriPlaneGenerator(torch.nn.Module):
         
         self.splatter_method = splatter_method
        
-        assert self.splatter_method in ['v3', 'v4', 'v5', 'v6'] # ("Invalid init method for deca splatter img. Must v3")
+        assert self.splatter_method in ['v3', 'v4', 'v5', 'v6', 'v7'] # ("Invalid init method for deca splatter img. Must v3")
         self.load_face_model_DECA_splatter_v3()
         
         ### -------- DECA face model [end] --------
@@ -571,7 +571,7 @@ class TriPlaneGenerator(torch.nn.Module):
 
     def load_face_model_DECA_splatter_v3(self):
 
-        if self.splatter_method == 'v3':
+        if self.splatter_method in ['v3', 'v7']:
             # self.load_face_model_DECA_splatter_v3()
             
             ## on the fly create norm verts
@@ -620,7 +620,7 @@ class TriPlaneGenerator(torch.nn.Module):
             )
 
               
-        elif self.splatter_method == 'v5':
+        elif self.splatter_method in ['v5', 'v7']:
             # use the projection to filter
             temp_fg_gaussian = GaussianModel(self.sh_degree, copy.deepcopy(verts))
                 
@@ -646,19 +646,26 @@ class TriPlaneGenerator(torch.nn.Module):
             _opacity_fg = res_fg["alpha"] # torch.Size([1, 64, 64])
             # those occluded by fg
             
-            # st()
-            # bg_verts_scaled = bg_verts/self.bg_depth * abs(self.target_bg_z_value)
-            bg_verts_scaled = bg_verts
+            bg_scale = (self.bg_depth-0.5)
+            # bg_verts_original = bg_verts.copy()
             
-            min_xy = torch.tensor([bg_verts_scaled[...,0].min(), bg_verts_scaled[...,1].min()]).to(bg_verts.device)
-            max_xy = torch.tensor([bg_verts_scaled[...,0].max(), bg_verts_scaled[...,1].max()]).to(bg_verts.device)
+            min_xy = torch.tensor([bg_verts[...,0].min(), bg_verts[...,1].min()]).to(bg_verts.device)
+            max_xy = torch.tensor([bg_verts[...,0].max(), bg_verts[...,1].max()]).to(bg_verts.device)
             
-            bg_uv = 2 * (bg_verts_scaled[...,:2] - min_xy) / (max_xy - min_xy) - 1 # shape: torch.Size([1, 66074, 2])
-            # bg_uv = bg_uv/self.bg_depth # * abs(self.target_bg_z_value)
+            bg_verts[...,:2] *= bg_scale
+
+            bg_uv = 2 * (bg_verts[...,:2] - min_xy) / (max_xy - min_xy) - 1 # shape: torch.Size([1, 66074, 2])
+            bg_uv[...,1] = -bg_uv[...,1]
            
             _opacity_bg_from_fg = F.grid_sample(_opacity_fg[None], bg_uv[None], mode='nearest', align_corners=False) # (B, C, 1, N_pts)
             blocked_mask = (_opacity_bg_from_fg>0.9).squeeze(0).squeeze(0)
             blocked_mask = blocked_mask.to(bg_verts.device) # [1, res*res]
+
+            bg_verts_unblocked_z = torch.where( 
+                blocked_mask, # cond
+                blocked_z_value , # if true, discard
+                self.target_bg_z_value # if false OR: bg_verts[...,2]
+            )
             
         elif self.splatter_method in ['v6']:
             bg_verts[...,:2] *= (self.bg_depth-0.5)
@@ -710,7 +717,7 @@ class TriPlaneGenerator(torch.nn.Module):
 
         ## UV: separate for fg and bg
         ### fg UV
-        if self.splatter_method == 'v3':
+        if self.splatter_method in ['v3', 'v7']:
             obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
             ### DECA-standard version load_obj
             _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
@@ -1319,6 +1326,12 @@ class TextureDecoder_allAttributes_noActivations(torch.nn.Module):
         
         self.xyz_offset_act = options['xyz_offset_act']
         assert self.xyz_offset_act in ['normalize', 'clamp']
+
+        self.fix_opacity = None
+        if 'fix_opacity' in options.keys() and options['fix_opacity']>0:
+            self.fix_opacity = options['fix_opacity']
+        # else:
+        #     self.fix_opacity = None
         
         self.net = torch.nn.Sequential(
             FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
@@ -1355,7 +1368,10 @@ class TextureDecoder_allAttributes_noActivations(torch.nn.Module):
             start_dim += 3
         
         if self.options['gen_opacity']:
+            
             out['opacity'] = x[..., start_dim:start_dim+1] # should be no adjustment for sigmoid
+            if self.fix_opacity is not None:
+                out['opacity'] = self.fix_opacity * torch.ones_like(out['opacity'])
             start_dim += 1
         
         if self.options['gen_scaling']:
