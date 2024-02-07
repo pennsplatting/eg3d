@@ -234,6 +234,10 @@ def parse_comma_separated_list(s):
 @click.option('--bg_scale_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
 @click.option('--bg_resolution', help='Resolution of num gaussians used to render bg', metavar='INT', type=click.IntRange(min=1), default=128, required=False, show_default=True)
 @click.option('--bg_depth', help='How many (ray_origin + ray_dir * bg_depth) is used to control the distance of bg gaussian to image plane', metavar='INT', type=click.IntRange(min=1), default=5, required=False, show_default=True)
+
+# GS decoder (common for text and bg)
+@click.option('--xyz_offset_act', help='Type of xyz_offset_act in gs attributes decoder', metavar='STR',  type=click.Choice(['normalize', 'clamp']), required=False, default='clamp')
+
 # GS save viz
 @click.option('--save_gaussian_ply', help='Enable gaussian ply saving during image saving ticks', metavar='BOOL',  type=bool, required=False, default=False)
 # GS rendering resolution during training
@@ -359,14 +363,14 @@ def main(**kwargs):
     ## GS Texture Decoder options
     text_decoder_options = {'gen_rgb':opts.gs_gen_rgb, 'gen_sh':opts.gs_gen_sh, 'gen_opacity':opts.gs_gen_opacity, 'gen_scaling':opts.gs_gen_scaling, 'gen_rotation':opts.gs_gen_rotation, 'gen_xyz_offset':opts.gs_gen_xyz_offset,
                                                                   'max_scaling':opts.gs_max_scaling, 'min_scaling':opts.gs_min_scaling, 'xyz_offset_scale':opts.gs_xyz_offset_scale,
-                                                                  'scale_bias':opts.gs_scale_bias, 'scale_factor':opts.gs_scale_factor,}
+                                                                  'scale_bias':opts.gs_scale_bias, 'scale_factor':opts.gs_scale_factor, 'xyz_offset_act': opts.xyz_offset_act}
     c.G_kwargs.text_decoder_kwargs = text_decoder_options
     
     ## GS BG Decoder options
     if opts.real_bg:
         bg_decoder_options = {'gen_rgb':opts.bg_gen_rgb, 'gen_sh':opts.bg_gen_sh, 'gen_opacity':opts.bg_gen_opacity, 'gen_scaling':opts.bg_gen_scaling, 'gen_rotation':opts.bg_gen_rotation, 'gen_xyz_offset':opts.bg_gen_xyz_offset,
                                                                   'max_scaling':opts.bg_max_scaling, 'min_scaling':opts.bg_min_scaling, 'xyz_offset_scale':opts.bg_xyz_offset_scale,
-                                                                  'scale_bias':opts.bg_scale_bias, 'scale_factor':opts.bg_scale_factor,}
+                                                                  'scale_bias':opts.bg_scale_bias, 'scale_factor':opts.bg_scale_factor, 'xyz_offset_act': opts.xyz_offset_act}
         c.G_kwargs.bg_decoder_kwargs = bg_decoder_options
         c.G_kwargs.bg_resolution = opts.bg_resolution
         c.G_kwargs.bg_depth = opts.bg_depth

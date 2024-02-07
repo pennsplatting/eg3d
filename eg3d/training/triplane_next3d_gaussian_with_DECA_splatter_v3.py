@@ -1227,6 +1227,9 @@ class TextureDecoder_allAttributes_noActivations(torch.nn.Module):
         self.out_dim = 3 * options['gen_rgb'] + 3 * options['gen_sh'] + 1 * options['gen_opacity'] + 3 * options['gen_scaling'] + 4 * options['gen_rotation'] + 3 * options['gen_xyz_offset']
         self.xyz_offset_scale = options['xyz_offset_scale']
         
+        self.xyz_offset_act = options['xyz_offset_act']
+        assert self.xyz_offset_act in ['normalize', 'clamp']
+        
         self.net = torch.nn.Sequential(
             FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
             torch.nn.Softplus(),
@@ -1274,9 +1277,12 @@ class TextureDecoder_allAttributes_noActivations(torch.nn.Module):
             start_dim += 4
         
         if self.options['gen_xyz_offset']:
-            out['xyz_offset'] = self.xyz_offset_scale * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]) # TODO: whether use this normalize? May constrain the offset not deviate too much
+            if self.xyz_offset_act == 'normalize':
+                out['xyz_offset'] = self.xyz_offset_scale * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]) # TODO: whether use this normalize? May constrain the offset not deviate too much
+            elif self.xyz_offset_act == 'clamp':
+                out['xyz_offset'] = torch.clamp(x[..., start_dim:start_dim+3], max = self.xyz_offset_scale, min = -self.xyz_offset_scale) # TODO: whether use this normalize? May constrain the offset not deviate too much
             start_dim += 3
-            
+
 
         # x.permute(0, 3, 1, 2)
         for key, v in out.items():
