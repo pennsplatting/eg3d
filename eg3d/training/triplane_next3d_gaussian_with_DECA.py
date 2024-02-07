@@ -552,7 +552,7 @@ class TriPlaneGenerator(torch.nn.Module):
         
     def load_face_model_DECA_face_centers(self):
         # obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
-        obj_filename_original = '/home/ritz/eg3d/eg3d/data/DECA_UV/head_template.obj'
+        obj_filename_original = '/root/zxy/data/head_template_27957_eg3d_space_final.obj'
         ### DECA-standard version load_obj
         _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
         
