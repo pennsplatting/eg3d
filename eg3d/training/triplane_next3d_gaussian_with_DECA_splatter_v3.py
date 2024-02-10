@@ -251,22 +251,6 @@ class TriPlaneGenerator(torch.nn.Module):
         self._last_planes = None
         
         
-        ### -------- DECA face model --------
-        self.bg_resolution = bg_resolution
-        self.bg_depth = bg_depth
-        
-        self.splatter_method = splatter_method
-       
-        assert self.splatter_method in ['v3', 'v4'] # ("Invalid init method for deca splatter img. Must v3")
-        self.load_face_model_DECA_splatter_v3()
-        
-        ### -------- DECA face model [end] --------
-
-        ### -------- driven by DECA parameter --------
-        self.get_flame_layer(flame_kwargs)
-
-        ### -------- driven by DECA parameter [end] --------
-        
         ### -------- gaussian splatting render --------
         self.gaussian_splatting_use_sr = False
         self.render_fg_bg_separately = render_fg_bg_separately
@@ -301,6 +285,7 @@ class TriPlaneGenerator(torch.nn.Module):
         
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
         self.image_size = image_size # for recording only
+
         
         # create a bank of gaussian models
         self.num_gaussians = num_gaussians
@@ -319,7 +304,22 @@ class TriPlaneGenerator(torch.nn.Module):
         assert self.alpha_option in ['alpha', 'silhouette']
         self.normalize_rgb_image = True
         
+        
+        ### -------- DECA face model -------- # loaded after init self.viewpoint_camera AND self.bg
+        self.bg_resolution = bg_resolution
+        self.bg_depth = bg_depth
+        
+        self.splatter_method = splatter_method
        
+        assert self.splatter_method in ['v3', 'v4', 'v5', 'v6', 'v7'] # ("Invalid init method for deca splatter img. Must v3")
+        self.load_face_model_DECA_splatter_v3()
+        
+        ### -------- DECA face model [end] --------
+        
+        ### -------- driven by DECA parameter --------
+        self.get_flame_layer(flame_kwargs)
+
+        ### -------- driven by DECA parameter [end] --------
 
         self.init_from_the_same_canonical = init_from_the_same_canonical
         
@@ -550,8 +550,13 @@ class TriPlaneGenerator(torch.nn.Module):
         intrisics = torch.tensor([[[4.2647, 0.0000, 0.5000],
          [0.0000, 4.2647, 0.5000],
          [0.0000, 0.0000, 1.0000]]]) # same as FFHQ dataset intrinsic. TODO: generalize to other datasets later
-        c2w = torch.eye(4)[None]
-        c2w[0,2,2] *= -1 # lookat: neg z
+        
+        # c2w = torch.eye(4)[None]
+        # c2w[0,2,2] *= -1 # lookat: neg z
+
+        c2w = torch.eye(4)[None] #.to(verts.device)
+        c2w[0,1:3] *= -1 # lookat: neg z
+        c2w[0,2,3] = 2.69 # z position
         
         # todo: make all the following as hyperparameters
         ## reuse the depth & res definition for bg gaussian, but they are actually for splatter image
@@ -559,11 +564,11 @@ class TriPlaneGenerator(torch.nn.Module):
         bg_depth = self.bg_depth # this is not the actual depth since they are either on the sphere or on the half-head plane, but can be seen as a scale factor of the h & w of the bg plane.
         self.target_bg_z_value = -0.1 # the z-value of plane that intersecting the head
 
-        
         ray_origins, ray_directions = self.ray_sampler(c2w, intrisics, splatter_resolution)
         
         bg_verts = ray_origins + ray_directions * bg_depth # already in eg3d rendering space
         # bg_verts = bg_verts.to(device='cuda')
+        # FIXME:
         return bg_verts.to(device='cuda')
 
     def align_flame_verts(self, flame_verts):
@@ -631,7 +636,7 @@ class TriPlaneGenerator(torch.nn.Module):
 
     def load_face_model_DECA_splatter_v3(self):
 
-        if self.splatter_method == 'v3':
+        if self.splatter_method in ['v3', 'v7']:
             # self.load_face_model_DECA_splatter_v3()
             
             ## on the fly create norm verts
@@ -643,7 +648,7 @@ class TriPlaneGenerator(torch.nn.Module):
             face_center_verts_norm = face_center_verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
             fg_verts_norm = torch.tensor(face_center_verts_norm, dtype=torch.float, device='cuda')
             
-        elif self.splatter_method == 'v4':
+        elif self.splatter_method in ['v4', 'v5', 'v6']:
             # self.load_face_model_DECA_splatter_v4()
     
             # ht_obj_path = '/home/xuyimeng/Data/DECA/head_template_27957_eg3d_space3.obj'
@@ -665,22 +670,82 @@ class TriPlaneGenerator(torch.nn.Module):
         bg_verts = self.create_splatter_bg()
 
         # combine face model and bg parts
-        ## remove the bg verts: those inside the range of the face model
-        x_min, x_max = verts[...,0].min(), verts[...,0].max()
-        y_min, y_max = verts[...,1].min(), verts[...,1].max()
-        z_min, z_max = verts[...,2].min(), verts[...,2].max()
-        
-        mask_x = (bg_verts[..., 0] >= x_min) & (bg_verts[..., 0] <= x_max)
-        mask_y = (bg_verts[..., 1] >= y_min) & (bg_verts[..., 1] <= y_max)
-        blocked_mask = mask_x & mask_y
         
         blocked_z_value = 20 # a very large distance behind the cam, discarded later
+
+        if self.splatter_method in ['v3', 'v4']:
+            ## remove the bg verts: those inside the range of the face model
+            x_min, x_max = verts[...,0].min(), verts[...,0].max()
+            y_min, y_max = verts[...,1].min(), verts[...,1].max()
+            z_min, z_max = verts[...,2].min(), verts[...,2].max()
         
-        bg_verts_unblocked_z = torch.where( 
-            blocked_mask, # cond
-            blocked_z_value , # if true, discard
-            self.target_bg_z_value # if false
-        )
+            mask_x = (bg_verts[..., 0] >= x_min) & (bg_verts[..., 0] <= x_max)
+            mask_y = (bg_verts[..., 1] >= y_min) & (bg_verts[..., 1] <= y_max)
+            blocked_mask = mask_x & mask_y # [1, res*res]
+            
+            bg_verts_unblocked_z = torch.where( 
+                blocked_mask, # cond
+                blocked_z_value , # if true, discard
+                self.target_bg_z_value # if false
+            )
+
+              
+        elif self.splatter_method in ['v5', 'v7']:
+            # use the projection to filter
+            temp_fg_gaussian = GaussianModel(self.sh_degree, copy.deepcopy(verts))
+                
+            intrinsics = torch.tensor([[[4.2647, 0.0000, 0.5000],
+                [0.0000, 4.2647, 0.5000],
+                [0.0000, 0.0000, 1.0000]]]).to(verts.device) # same as FFHQ dataset intrinsic. TODO: generalize to other datasets later
+            c2w = torch.eye(4).to(verts.device)[None]
+            c2w[0,1:3] *= -1 # lookat: neg z
+            c2w[0,2,3] = 2.69 # z position
+            
+            # c2w for front facing: ([[ 0.9972307 , -0.01765099, -0.07224574,  0.18278103],
+            #         [-0.02482522, -0.99471354, -0.09964309,  0.24571559],
+            #         [-0.07010502,  0.10116066, -0.992397  ,  2.6825762 ],
+            #         [ 0.        ,  0.        ,  0.        ,  1.        ]])
+            self.viewpoint_camera.update_transforms2(intrinsics, c2w[0])
+
+            temp_fg_gaussian.update_rgb_textures(torch.zeros_like(verts))
+            temp_fg_gaussian.update_opacity(torch.ones_like(verts[...,0:1]))
+
+            res_fg = gs_render(self.viewpoint_camera, temp_fg_gaussian, None, self.background)
+            # _rgb_image_fg = res_fg["render"]
+            # _alpha_image_fg = 1 - res_fg["alpha"]
+            _opacity_fg = res_fg["alpha"] # torch.Size([1, 64, 64])
+            # those occluded by fg
+            
+            bg_scale = (self.bg_depth-0.5)
+            # bg_verts_original = bg_verts.copy()
+            
+            min_xy = torch.tensor([bg_verts[...,0].min(), bg_verts[...,1].min()]).to(bg_verts.device)
+            max_xy = torch.tensor([bg_verts[...,0].max(), bg_verts[...,1].max()]).to(bg_verts.device)
+            
+            bg_verts[...,:2] *= bg_scale
+
+            bg_uv = 2 * (bg_verts[...,:2] - min_xy) / (max_xy - min_xy) - 1 # shape: torch.Size([1, 66074, 2])
+            bg_uv[...,1] = -bg_uv[...,1]
+           
+            _opacity_bg_from_fg = F.grid_sample(_opacity_fg[None], bg_uv[None], mode='nearest', align_corners=False) # (B, C, 1, N_pts)
+            blocked_mask = (_opacity_bg_from_fg>0.9).squeeze(0).squeeze(0)
+            blocked_mask = blocked_mask.to(bg_verts.device) # [1, res*res]
+
+            bg_verts_unblocked_z = torch.where( 
+                blocked_mask, # cond
+                blocked_z_value , # if true, discard
+                self.target_bg_z_value # if false OR: bg_verts[...,2]
+            )
+            
+        elif self.splatter_method in ['v6']:
+            bg_verts[...,:2] *= (self.bg_depth-0.5)
+            blocked_mask = torch.zeros_like(bg_verts[...,0]).to(torch.bool)
+            
+            bg_verts_unblocked_z = torch.where( 
+                blocked_mask, # cond
+                blocked_z_value , # if true, discard
+                bg_verts[...,2] # if false
+            )
         
         
         bg_verts_unblocked = torch.cat([bg_verts[...,:2],bg_verts_unblocked_z[...,None]], dim=-1)
@@ -709,6 +774,8 @@ class TriPlaneGenerator(torch.nn.Module):
         # ------------
         fg_save_mask = fg_verts_unblocked_norm[...,2]< blocked_z_value 
         bg_save_mask = bg_verts_unblocked[...,2]< blocked_z_value 
+        # FIXME: 
+        bg_save_mask = torch.ones_like(bg_save_mask).to(torch.bool)
         
         fg_save_verts = fg_verts_unblocked_norm[fg_save_mask]
         bg_save_verts = bg_verts_unblocked[bg_save_mask]
@@ -720,7 +787,7 @@ class TriPlaneGenerator(torch.nn.Module):
 
         ## UV: separate for fg and bg
         ### fg UV
-        if self.splatter_method == 'v3':
+        if self.splatter_method in ['v3', 'v7']:
             obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
             ### DECA-standard version load_obj
             _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
@@ -738,7 +805,7 @@ class TriPlaneGenerator(torch.nn.Module):
             face_center_verts_uv = face_center_verts_uv[fg_save_mask[None]]
             self.register_buffer('raw_uvcoords', face_center_verts_uv)
 
-        elif self.splatter_method == 'v4':
+        elif self.splatter_method in ['v4', 'v5', 'v6']:
             uvcoords = uv_verts_v4[None, ...]
             uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
 
@@ -1025,6 +1092,33 @@ class TriPlaneGenerator(torch.nn.Module):
                 # current_gaussian_verts = self.get_a_gaussian_verts()
                 current_gaussian = GaussianModel(self.sh_degree, current_gaussian_verts)
                 
+                # st()
+                # c2w = torch.eye(4)[None]
+                # c2w[0,2,2] *= -1 # lookat: neg z
+                # _cam2world_matrix = c2w
+                
+                # c2w = torch.eye(4).to(self.verts.device)[None]
+                # c2w[0,1:3] *= -1 # lookat: neg z
+                # c2w[0,2,3] = 2.69 # z position
+                # _cam2world_matrix = c2w[0]
+                
+                # if not torch.all(_cam2world_matrix==0):
+                #     print(_cam2world_matrix)
+                #     st()
+                
+                # _cam2world_matrix = torch.tensor(
+                #     [[[ 0.99943525, -0.0036771 , -0.03340222,  0.09008402],
+                #     [-0.00393199, -0.99996364, -0.00756844,  0.03876003],
+                #     [-0.03337318,  0.0076955 , -0.9994133 ,  2.6982183 ],
+                #     [ 0.        ,  0.        ,  0.        ,  1.        ]]]
+                # ).to(current_gaussian_verts.device)
+                
+                # _cam2world_matrix = torch.tensor([[ 0.9922, -0.0209, -0.1225,  0.3127],   
+                #     [-0.0137, -0.9981,  0.0594, -0.1375], 
+                #     [-0.1236, -0.0572, -0.9907,  2.6783], 
+                #     [ 0.0000,  0.0000,  0.0000,  1.0000]]).to(device='cuda:0')
+             
+                
                 self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
                 
                 # update bg gaussian
@@ -1123,7 +1217,7 @@ class TriPlaneGenerator(torch.nn.Module):
                         
                         if self.text_decoder.options['gen_scaling']:
                             _scaling = textures[0,start_dim:start_dim+3,0].permute(1,0)
-                            current_gaussian.update_scaling(_scaling, max_s = self.text_decoder.options['max_scaling'], min_s = self.text_decoder.options['min_scaling'])
+                            # current_gaussian.update_scaling(_scaling, max_s = self.text_decoder.options['max_scaling'], min_s = self.text_decoder.options['min_scaling'])
                             start_dim += 3
                             
                         if self.text_decoder.options['gen_rotation']:
@@ -1301,6 +1395,12 @@ class TextureDecoder_allAttributes_noActivations(torch.nn.Module):
         
         self.xyz_offset_act = options['xyz_offset_act']
         assert self.xyz_offset_act in ['normalize', 'clamp']
+
+        self.fix_opacity = None
+        if 'fix_opacity' in options.keys() and options['fix_opacity']>0:
+            self.fix_opacity = options['fix_opacity']
+        # else:
+        #     self.fix_opacity = None
         
         self.net = torch.nn.Sequential(
             FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
@@ -1337,7 +1437,10 @@ class TextureDecoder_allAttributes_noActivations(torch.nn.Module):
             start_dim += 3
         
         if self.options['gen_opacity']:
+            
             out['opacity'] = x[..., start_dim:start_dim+1] # should be no adjustment for sigmoid
+            if self.fix_opacity is not None:
+                out['opacity'] = self.fix_opacity * torch.ones_like(out['opacity'])
             start_dim += 1
         
         if self.options['gen_scaling']:
