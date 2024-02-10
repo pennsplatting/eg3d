@@ -626,12 +626,9 @@ class TriPlaneGenerator(torch.nn.Module):
         # Forward Pass of FLAME, one can easily use this as a layer in a Deep learning Framework
         vertice, landmark = self.flamelayer(
             shape_params, expression_params, pose_params
-        )  # For RingNet project
-        # print("max:", vertice[:,0].max(),vertice[:,1].max(),vertice[:,2].max(), "min", vertice[:,0].min(),vertice[:,1].min(),vertice[:,2].min())
+        ) 
         
         vertice = self.align_flame_verts(vertice)
-        # print("after")
-        # print("max:", vertice[:,0].max(),vertice[:,1].max(),vertice[:,2].max(), "min", vertice[:,0].min(),vertice[:,1].min(),vertice[:,2].min())
         return vertice
 
     def load_face_model_DECA_splatter_v3(self):
@@ -640,12 +637,18 @@ class TriPlaneGenerator(torch.nn.Module):
             # self.load_face_model_DECA_splatter_v3()
             
             ## on the fly create norm verts
-            ply_filename = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz_face_centers.ply'
-            plydata = PlyData.read(ply_filename)
-            face_center_verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+            # ply_filename = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz_face_centers.ply'
+            # plydata = PlyData.read(ply_filename)
+            # face_center_verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
 
+            # ### normalize to eg3d
+            # face_center_verts_norm = face_center_verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+
+            obj_path = '/root/zxy/data/head_template_5023_align.obj'
+            verts, _, _, _  = load_obj(obj_path)
             ### normalize to eg3d
-            face_center_verts_norm = face_center_verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+            face_center_verts_norm = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+
             fg_verts_norm = torch.tensor(face_center_verts_norm, dtype=torch.float, device='cuda')
             
         elif self.splatter_method in ['v4', 'v5', 'v6']:
@@ -788,22 +791,31 @@ class TriPlaneGenerator(torch.nn.Module):
         ## UV: separate for fg and bg
         ### fg UV
         if self.splatter_method in ['v3', 'v7']:
-            obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
-            ### DECA-standard version load_obj
-            _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
+            # obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
+            # ### DECA-standard version load_obj
+            # _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
             
-            faces = faces[None, ...]
-            uvfaces = uvfaces[None, ...]
-            uvcoords = uvcoords[None, ...]
+            # faces = faces[None, ...]
+            # uvfaces = uvfaces[None, ...]
+            # uvcoords = uvcoords[None, ...]
 
-            uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
-            face_uvcoords = face_vertices(uvcoords, uvfaces)
-            face_center_verts_uv = face_uvcoords.mean(dim=-2)
+            # uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
+            # face_uvcoords = face_vertices(uvcoords, uvfaces)
+            # face_center_verts_uv = face_uvcoords.mean(dim=-2)
             
             #### filter fg save
-            face_center_verts_uv = face_center_verts_uv.to(fg_save_mask.device)
-            face_center_verts_uv = face_center_verts_uv[fg_save_mask[None]]
-            self.register_buffer('raw_uvcoords', face_center_verts_uv)
+            # face_center_verts_uv = face_center_verts_uv.to(fg_save_mask.device)
+            # face_center_verts_uv = face_center_verts_uv[fg_save_mask[None]]
+            # self.register_buffer('raw_uvcoords', face_center_verts_uv)
+
+            uv_obj_path = '/root/zxy/data/head_template_5023.obj'
+            _, uv_verts, _, _  = load_obj(uv_obj_path)
+            uvcoords = uv_verts[None, ...]
+            uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
+
+            #### filter fg save
+            uvcoords = uvcoords.to(fg_save_mask.device)
+            self.register_buffer('raw_uvcoords', uvcoords)
 
         elif self.splatter_method in ['v4', 'v5', 'v6']:
             uvcoords = uv_verts_v4[None, ...]
