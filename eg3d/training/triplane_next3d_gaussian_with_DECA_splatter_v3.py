@@ -216,6 +216,7 @@ class TriPlaneGenerator(torch.nn.Module):
         sr_num_fp16_res     = 0,
         text_decoder_kwargs = {},   # GS TextureDecoder
         bg_decoder_kwargs   = {},   # GS BackgroundDecoder
+        flame_kwargs        = {},   # FLAME model config
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
         rendering_kwargs    = {},
         sr_kwargs = {},
@@ -315,7 +316,10 @@ class TriPlaneGenerator(torch.nn.Module):
         
         ### -------- DECA face model [end] --------
         
-       
+        ### -------- driven by DECA parameter --------
+        self.get_flame_layer(flame_kwargs)
+
+        ### -------- driven by DECA parameter [end] --------
 
         self.init_from_the_same_canonical = init_from_the_same_canonical
         
@@ -567,7 +571,65 @@ class TriPlaneGenerator(torch.nn.Module):
         # FIXME:
         return bg_verts.to(device='cuda')
 
+    def align_flame_verts(self, flame_verts):
+        _B, _V, _ = flame_verts.shape
+        ori_mean = torch.mean(self.verts[None].repeat(_B,1,1), dim=1)
+        flame_mean = torch.mean(flame_verts, dim=1)
+        trans = torch.eye(4)[None].repeat(_B,1,1).to('cuda')
+        trans[:,:3,3] = ori_mean - flame_mean
+        sx = (self.verts[...,0].max() - self.verts[...,0].min()) / (flame_verts[...,0].max() - flame_verts[...,0].min())
+        sy = (self.verts[...,1].max() - self.verts[...,1].min()) / (flame_verts[...,1].max() - flame_verts[...,1].min())
+        sz = (self.verts[...,2].max() - self.verts[...,2].min()) / (flame_verts[...,2].max() - flame_verts[...,2].min())
+        s = (sx + sy + sz) / 3.0
+        trans[:,0,0] = s
+        trans[:,1,1] = s
+        trans[:,2,2] = s
+        flame_verts = torch.cat([flame_verts, torch.ones(_B, _V, 1, dtype=torch.float32, device='cuda')], dim=2)
+        flame_verts = torch.matmul(flame_verts, torch.transpose(trans, dim0=1, dim1=2))
+        flame_verts = flame_verts[...,:3]
+        return flame_verts
 
+
+    def get_flame_layer(self, config):
+        import sys
+        sys.path.append('/root/zxy/eg3d/eg3d/training')
+        from FLAME_PyTorch.flame_pytorch import FLAME
+        self.flamelayer = FLAME(config)
+        self.flamelayer.cuda()
+
+    def deform_vertices_from_FLAME(self):
+        # Creating a batch of mean shapes
+        shape_params = torch.rand(self.flamelayer.batch_size, 100).cuda()
+        # radian = np.pi / 180.0
+        # Creating a batch of different global poses
+        # pose_params_numpy[:, :3] : global rotaation
+        # pose_params_numpy[:, 3:] : jaw rotaation
+        # pose_params_numpy = np.array(
+        #     [
+        #         [0.0, 30.0 * radian, 0.0, 0.0, 0.0, 0.0],
+        #         [0.0, -30.0 * radian, 0.0, 0.0, 0.0, 0.0],
+        #         [0.0, 85.0 * radian, 0.0, 0.0, 0.0, 0.0],
+        #         [0.0, -48.0 * radian, 0.0, 0.0, 0.0, 0.0],
+        #         [0.0, 10.0 * radian, 0.0, 0.0, 0.0, 0.0],
+        #         [0.0, -15.0 * radian, 0.0, 0.0, 0.0, 0.0],
+        #         [0.0, 0.0 * radian, 0.0, 0.0, 0.0, 0.0],
+        #         [0.0, -0.0 * radian, 0.0, 0.0, 0.0, 0.0],
+        #     ],
+        #     dtype=np.float32,
+        # )
+        # pose_params = torch.tensor(pose_params_numpy, dtype=torch.float32).cuda()
+        pose_params = torch.zeros(self.flamelayer.batch_size, 6, dtype=torch.float32).cuda() 
+
+        # Cerating a batch of neutral expressions
+        expression_params = torch.rand(self.flamelayer.batch_size, 50, dtype=torch.float32).cuda()
+
+        # Forward Pass of FLAME, one can easily use this as a layer in a Deep learning Framework
+        vertice, landmark = self.flamelayer(
+            shape_params, expression_params, pose_params
+        ) 
+        
+        vertice = self.align_flame_verts(vertice)
+        return vertice
 
     def load_face_model_DECA_splatter_v3(self):
 
@@ -575,22 +637,33 @@ class TriPlaneGenerator(torch.nn.Module):
             # self.load_face_model_DECA_splatter_v3()
             
             ## on the fly create norm verts
-            ply_filename = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz_face_centers.ply'
-            plydata = PlyData.read(ply_filename)
-            face_center_verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+            # ply_filename = '/home/xuyimeng/Data/DECA/seed0000_head_template2_xzymean125_flipxz_face_centers.ply'
+            # plydata = PlyData.read(ply_filename)
+            # face_center_verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
 
+            # ### normalize to eg3d
+            # face_center_verts_norm = face_center_verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+
+            obj_path = '/root/zxy/data/head_template_5023_align.obj'
+            verts, _, _, _  = load_obj(obj_path)
             ### normalize to eg3d
-            face_center_verts_norm = face_center_verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+            face_center_verts_norm = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+
             fg_verts_norm = torch.tensor(face_center_verts_norm, dtype=torch.float, device='cuda')
             
         elif self.splatter_method in ['v4', 'v5', 'v6']:
             # self.load_face_model_DECA_splatter_v4()
     
-            ht_obj_path = '/home/xuyimeng/Data/DECA/head_template_27957_eg3d_space3.obj'
-            verts, uv_verts_v4, _faces, _uv_faces  = load_obj(ht_obj_path)
+            # ht_obj_path = '/home/xuyimeng/Data/DECA/head_template_27957_eg3d_space3.obj'
+            ht_obj_path = '/root/zxy/data/head_template_5023_align.obj'
+            verts, _, _, _  = load_obj(ht_obj_path)
+            ht_obj_path = '/root/zxy/data/head_template_5023.obj'
+            _, uv_verts_v4, _, _  = load_obj(ht_obj_path)
+            # verts, uv_verts_v4, _faces, _uv_faces  = load_obj(ht_obj_path)
             
             ### normalize to eg3d
             verts_norm = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+            print("max:", verts_norm[:,0].max(),verts_norm[:,1].max(),verts_norm[:,2].max(), "min", verts_norm[:,0].min(),verts_norm[:,1].min(),verts_norm[:,2].min())
             fg_verts_norm = torch.tensor(verts_norm, dtype=torch.float, device='cuda')
             
     
@@ -718,22 +791,31 @@ class TriPlaneGenerator(torch.nn.Module):
         ## UV: separate for fg and bg
         ### fg UV
         if self.splatter_method in ['v3', 'v7']:
-            obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
-            ### DECA-standard version load_obj
-            _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
+            # obj_filename_original = '/home/xuyimeng/Repo/DECA/data/head_template.obj'
+            # ### DECA-standard version load_obj
+            # _, uvcoords, faces, uvfaces = load_obj(obj_filename_original)
             
-            faces = faces[None, ...]
-            uvfaces = uvfaces[None, ...]
-            uvcoords = uvcoords[None, ...]
+            # faces = faces[None, ...]
+            # uvfaces = uvfaces[None, ...]
+            # uvcoords = uvcoords[None, ...]
 
-            uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
-            face_uvcoords = face_vertices(uvcoords, uvfaces)
-            face_center_verts_uv = face_uvcoords.mean(dim=-2)
+            # uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
+            # face_uvcoords = face_vertices(uvcoords, uvfaces)
+            # face_center_verts_uv = face_uvcoords.mean(dim=-2)
             
             #### filter fg save
-            face_center_verts_uv = face_center_verts_uv.to(fg_save_mask.device)
-            face_center_verts_uv = face_center_verts_uv[fg_save_mask[None]]
-            self.register_buffer('raw_uvcoords', face_center_verts_uv)
+            # face_center_verts_uv = face_center_verts_uv.to(fg_save_mask.device)
+            # face_center_verts_uv = face_center_verts_uv[fg_save_mask[None]]
+            # self.register_buffer('raw_uvcoords', face_center_verts_uv)
+
+            uv_obj_path = '/root/zxy/data/head_template_5023.obj'
+            _, uv_verts, _, _  = load_obj(uv_obj_path)
+            uvcoords = uv_verts[None, ...]
+            uvcoords = uvcoords*2 - 1; uvcoords[...,1] = -uvcoords[...,1] # map to [-1,1], and inverse y->v (y is up while v is down)
+
+            #### filter fg save
+            uvcoords = uvcoords.to(fg_save_mask.device)
+            self.register_buffer('raw_uvcoords', uvcoords)
 
         elif self.splatter_method in ['v4', 'v5', 'v6']:
             uvcoords = uv_verts_v4[None, ...]
@@ -741,7 +823,7 @@ class TriPlaneGenerator(torch.nn.Module):
 
             #### filter fg save
             uvcoords = uvcoords.to(fg_save_mask.device)
-            uvcoords = uvcoords[fg_save_mask[None]]
+            # uvcoords = uvcoords[fg_save_mask[None]]
             self.register_buffer('raw_uvcoords', uvcoords)
         
         
@@ -1011,17 +1093,16 @@ class TriPlaneGenerator(torch.nn.Module):
             
 
             bg_gaussian = GaussianModel_BG(self.sh_degree, self.bg_verts)
-            
-            
+            current_gaussian_batch = self.deform_vertices_from_FLAME()
             
             # to save ply during G_ema eval
             _xyz_offset = None
             ## TODO: can gaussiam splatting run batch in parallel?
-            for _gs_i, _cam2world_matrix, _intrinsics, textures_gen, bg_gen in zip(range(len(textures_gen_batch)), cam2world_matrix, intrinsics, textures_gen_batch, bg_gen_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
+            for _gs_i, _cam2world_matrix, _intrinsics, textures_gen, bg_gen, current_gaussian_verts in zip(range(len(textures_gen_batch)), cam2world_matrix, intrinsics, textures_gen_batch, bg_gen_batch, current_gaussian_batch): # textures_gen.shape -> torch.Size([3, 32, 256, 256])
                 # randomly select a new gaussian for each rendering
                 # current_gaussian = self.get_a_gaussian()
-                current_gaussian_verts = self.get_a_gaussian_verts()
-                current_gaussian = GaussianModel(self.sh_degree, copy.deepcopy(current_gaussian_verts))
+                # current_gaussian_verts = self.get_a_gaussian_verts()
+                current_gaussian = GaussianModel(self.sh_degree, current_gaussian_verts)
                 
                 # st()
                 # c2w = torch.eye(4)[None]

@@ -248,6 +248,86 @@ def parse_comma_separated_list(s):
 @click.option('--opacity_reg',    help='Opacity regularization for GS foreground strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=0, required=False, show_default=True)
 @click.option('--opacity_ref_value',    help='Desired opacity value for GS foreground.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
 @click.option('--opacity_loss_choice', help='Type of opacity loss for GS foreground.', metavar='STR',  type=click.Choice(['l1', 'smooth_l1', 'l2']), required=False, default='l1', show_default=True)
+@click.option('--test_texture', help='Test UV coordinates', metavar='BOOL',  type=bool, required=False, default=False)
+
+# FLAME model
+@click.option(
+    "--flame_model_path",
+    type=str,
+    default="/root/zxy/eg3d/eg3d/training/FLAME_PyTorch/model/flame2023.pkl",
+    help="flame model path",
+)
+
+@click.option(
+    "--static_landmark_embedding_path",
+    type=str,
+    default="/root/zxy/eg3d/eg3d/training/FLAME_PyTorch/model/flame_static_embedding.pkl",
+    help="Static landmark embeddings path for FLAME",
+)
+
+@click.option(
+    "--dynamic_landmark_embedding_path",
+    type=str,
+    default="/root/zxy/eg3d/eg3d/training/FLAME_PyTorch/model/flame_dynamic_embedding.npy",
+    help="Dynamic contour embedding path for FLAME",
+)
+
+# FLAME hyper-parameters
+
+@click.option(
+    "--shape_params", type=int, default=100, help="the number of shape parameters"
+)
+
+@click.option(
+    "--expression_params",
+    type=int,
+    default=50,
+    help="the number of expression parameters",
+)
+
+@click.option(
+    "--pose_params", type=int, default=6, help="the number of pose parameters"
+)
+
+# Training hyper-parameters
+
+@click.option(
+    "--use_face_contour",
+    default=True,
+    type=bool,
+    help="If true apply the landmark loss on also on the face contour.",
+)
+
+@click.option(
+    "--use_3d_translation",
+    default=True,  # Flase for RingNet project
+    type=bool,
+    help="If true apply the landmark loss on also on the face contour.",
+)
+
+@click.option(
+    "--optimize_eyeballpose",
+    default=True,  # False for For RingNet project
+    type=bool,
+    help="If true optimize for the eyeball pose.",
+)
+
+@click.option(
+    "--optimize_neckpose",
+    default=True,  # False For RingNet project
+    type=bool,
+    help="If true optimize for the neck pose.",
+)
+
+# @click.option("--num_worker", type=int, default=4, help="pytorch number worker.")
+
+# @click.option("--batch_size", type=int, default=8, help="Training batch size.")
+
+@click.option("--ring_margin", type=float, default=0.5, help="ring margin.")
+
+@click.option(
+    "--ring_loss_weight", type=float, default=1.0, help="weight on ring loss."
+)
 
 
 def main(**kwargs):
@@ -276,7 +356,7 @@ def main(**kwargs):
     # Initialize config.
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
     c = dnnlib.EasyDict() # Main config dict.
-    c.G_kwargs = dnnlib.EasyDict(class_name=None, z_dim=512, w_dim=512, mapping_kwargs=dnnlib.EasyDict())
+    c.G_kwargs = dnnlib.EasyDict(class_name=None, z_dim=512, w_dim=512, mapping_kwargs=dnnlib.EasyDict(), flame_kwargs=dnnlib.EasyDict())
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
     c.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
@@ -376,7 +456,24 @@ def main(**kwargs):
         c.G_kwargs.bg_decoder_kwargs = bg_decoder_options
         c.G_kwargs.bg_resolution = opts.bg_resolution
         c.G_kwargs.bg_depth = opts.bg_depth
-        
+    
+    ## flame config
+    c.G_kwargs.flame_kwargs.flame_model_path = opts.flame_model_path
+    c.G_kwargs.flame_kwargs.static_landmark_embedding_path = opts.static_landmark_embedding_path
+    c.G_kwargs.flame_kwargs.dynamic_landmark_embedding_path = opts.dynamic_landmark_embedding_path
+    c.G_kwargs.flame_kwargs.shape_params = opts.shape_params
+    c.G_kwargs.flame_kwargs.expression_params = opts.expression_params
+    c.G_kwargs.flame_kwargs.pose_params = opts.pose_params
+    c.G_kwargs.flame_kwargs.use_face_contour = opts.use_face_contour
+    c.G_kwargs.flame_kwargs.use_3D_translation = opts.use_3d_translation
+    c.G_kwargs.flame_kwargs.optimize_eyeballpose = opts.optimize_eyeballpose
+    c.G_kwargs.flame_kwargs.optimize_neckpose = opts.optimize_neckpose
+    c.G_kwargs.flame_kwargs.num_worker = opts.workers
+    c.G_kwargs.flame_kwargs.batch_size = opts.batch
+    c.G_kwargs.flame_kwargs.ring_margin = opts.ring_margin
+    c.G_kwargs.flame_kwargs.ring_loss_weight = opts.ring_loss_weight
+
+
     ## GS bank
     c.G_kwargs.num_gaussians = opts.num_gaussians   
     c.G_kwargs.optimize_gaussians = opts.optimize_gaussians
