@@ -40,3 +40,6 @@ eg3d/~
 proj*
 .vscode
 
+FLAME_PyTorch/
+submodules/
+v3

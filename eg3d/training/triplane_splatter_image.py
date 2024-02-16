@@ -13,20 +13,17 @@ from torch_utils import persistence
 from training.networks_stylegan2 import Generator as StyleGAN2Backbone
 from training.volumetric_rendering.renderer import ImportanceRenderer
 # from training.volumetric_rendering.renderer_3dmm import ImportanceRenderer ##replace with splatting renderer later
-from training.volumetric_rendering.renderer_next3d import Pytorch3dRasterizer, face_vertices, generate_triangles, transform_points, batch_orth_proj, angle2matrix
 from training.volumetric_rendering.ray_sampler import RaySampler
 import dnnlib
 
 from ipdb import set_trace as st
 import cv2
 import torch.nn as nn
-from pytorch3d.io import load_obj
 import torch.nn.functional as F
 
 from training.gaussian_splatting.gaussian_model import GaussianModel
 from training.gaussian_splatting.cameras import MiniCam
 from training.gaussian_splatting.renderer import render as gs_render
-from pytorch3d.renderer import look_at_view_transform
 from training.gaussian_splatting.utils.graphics_utils import getWorld2View, getProjectionMatrix
 import numpy as np
 
@@ -55,6 +52,7 @@ class TriPlaneGenerator(torch.nn.Module):
         w_dim,                      # Intermediate latent (W) dimensionality.
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
+        plane_resolution,
         sh_degree           = 3,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
@@ -66,18 +64,18 @@ class TriPlaneGenerator(torch.nn.Module):
         self.z_dim=z_dim
         self.c_dim=c_dim
         self.w_dim=w_dim
-        self.img_resolution=128
+        self.img_resolution=img_resolution
         self.img_channels=img_channels
         self.renderer = ImportanceRenderer()
         self.ray_sampler = RaySampler()
         # TODO: maybe synthesize uv texture directly with stylegan2 backbone (img_channels=3)
         # so that there's no need for decoder
-        self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=img_resolution, img_channels=16, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
+        self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=plane_resolution, img_channels=16, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
         
         self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
         # self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
         # self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
-        # self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 3})
+        self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 3})
         self.neural_rendering_resolution = 64
         self.rendering_kwargs = rendering_kwargs
         
@@ -100,7 +98,7 @@ class TriPlaneGenerator(torch.nn.Module):
             image_size = 512
         z_near, z_far = 0.1, 2 # TODO: find suitable value for this
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
-        self.gaussian = GaussianModel(self.sh_degree, self.img_resolution)
+        self.gaussian = GaussianModel(self.sh_degree, plane_resolution)
     
         
     def mapping(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
@@ -169,13 +167,19 @@ class TriPlaneGenerator(torch.nn.Module):
         else:
             
             ### ----- gaussian splatting -----
-            feature_gen_batch = planes.permute(0, 2, 3, 1) # (4, K, H, W) -> (4, H, W, K)
+            feature_gen_batch = planes.permute(0, 2, 3, 1) # (B, K, H, W) -> (B, H, W, K)
             rgb_image_batch = []
             alpha_image_batch = [] # mask
+
+            ray_origins, ray_directions = self.ray_sampler(cam2world_matrix, intrinsics, 128)
+            # raterization
+            white_background = True
+            bg_color = [1,1,1] if white_background else [0, 0, 0]
+            background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
             
             # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
             
-            for _cam2world_matrix, feature_gen in zip(cam2world_matrix, feature_gen_batch):
+            for _cam2world_matrix, feature_gen, _ray_origins, _ray_directions in zip(cam2world_matrix, feature_gen_batch, ray_origins, ray_directions):
                 self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
 
                 ## TODO: can gaussiam splatting run batch in parallel?
@@ -183,12 +187,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 # textures.requires_grad_(True) 
                 # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
                 
-                self.gaussian.update(feature_gen)
-                # raterization
-                white_background = True
-                bg_color = [1,1,1] if white_background else [0, 0, 0]
-                background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-                
+                self.gaussian.update(feature_gen, _ray_origins, _ray_directions)
                 res = gs_render(self.viewpoint_camera, self.gaussian, None, background)
                 _rgb_image = res["render"]
                 _alpha_image = res["alpha"]
@@ -201,7 +200,7 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
             ## FIXME: try different normalization method to normalize rgb image to [-1,1]
-            rgb_image = (rgb_image - 0.5) * 2
+            # rgb_image = (rgb_image - 0.5) * 2
 
             # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")
             
@@ -211,7 +210,7 @@ class TriPlaneGenerator(torch.nn.Module):
             ## TODO: the below superresolution shall be kept?
             ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?
             if self.gaussian_splatting_use_sr:
-                sr_image = self.superresolution(rgb_image, textures_gen_batch, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+                sr_image = self.superresolution(rgb_image, feature_gen_batch, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
             else:
                 sr_image = rgb_image
                 rgb_image = rgb_image[:,:,::8, ::8] # TODO: FIXME change this downsample to a smoother gaussian filtering

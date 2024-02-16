@@ -70,7 +70,7 @@ class GaussianModel:
         self.spatial_lr_scale = 0
         self.ray_dirs = torch.empty(0)
         self.setup_functions()
-        self.init_ray_dirs()
+        # self.init_ray_dirs()
 
     def capture(self):
         return (
@@ -203,7 +203,7 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         
-    def update(self, feature):
+    def update(self, feature, ray_origins, ray_directions):
         H, W, K = feature.shape
         feature = feature.reshape(H*W, K)
         depth = feature[:, 0:1]
@@ -213,41 +213,44 @@ class GaussianModel:
         # rotation = feature[:, 8:12]
         # features_dc = feature[:,12:15].unsqueeze(2)
         
-        self._xyz = self.get_pos(depth, offset)
+        self._xyz = self.get_pos(depth, offset, ray_origins, ray_directions)
         self._scaling = feature[:, 5:8] 
         self._rotation = feature[:, 8:12]
         self._opacity = feature[:, 4:5]
         self._features_dc = feature[:,12:15].unsqueeze(2).transpose(1, 2).contiguous()
         self._features_rest = torch.zeros((H*W, 15, 3), device="cuda")
+        # st()
         
-    def init_ray_dirs(self):
-        x = torch.linspace(-self.img_resolution // 2 + 0.5, 
-                            self.img_resolution // 2 - 0.5, 
-                            self.img_resolution) 
-        y = torch.linspace( self.img_resolution // 2 - 0.5, 
-                           -self.img_resolution // 2 + 0.5, 
-                            self.img_resolution)
+    # def init_ray_dirs(self):
+    #     x = torch.linspace(-self.img_resolution // 2 + 0.5, 
+    #                         self.img_resolution // 2 - 0.5, 
+    #                         self.img_resolution) 
+    #     y = torch.linspace( self.img_resolution // 2 - 0.5, 
+    #                        -self.img_resolution // 2 + 0.5, 
+    #                         self.img_resolution)
 
-        grid_x, grid_y = torch.meshgrid(x, y, indexing='xy')
-        ones = torch.ones_like(grid_x, dtype=grid_x.dtype)
-        ray_dirs = torch.stack([grid_x, grid_y, ones]).to("cuda") # (3, H, W)
-        ray_dirs = ray_dirs.permute(1, 2, 0).reshape(self.img_resolution*self.img_resolution, 3)
-        # expands ray dirs along the batch dimension
-        # adjust ray directions according to fov if not done already
+    #     grid_x, grid_y = torch.meshgrid(x, y, indexing='xy')
+    #     ones = torch.ones_like(grid_x, dtype=grid_x.dtype)
+    #     ray_dirs = torch.stack([grid_x, grid_y, ones]).to("cuda") # (3, H, W)
+    #     ray_dirs = ray_dirs.permute(1, 2, 0).reshape(self.img_resolution*self.img_resolution, 3)
+    #     # expands ray dirs along the batch dimension
+    #     # adjust ray directions according to fov if not done already
 
-        # ray_dirs_xy = ray_dirs.expand(depth_network.shape[0], 3, *ray_dirs.shape[2:])
-        self.ray_dirs = ray_dirs
+    #     # ray_dirs_xy = ray_dirs.expand(depth_network.shape[0], 3, *ray_dirs.shape[2:])
+    #     self.ray_dirs = ray_dirs
         
         
-    def get_pos(self, depth_network, offset, const_offset=None):
+    def get_pos(self, depth, offset, ray_origins, ray_directions, const_offset=None, add_offset=False):
         # depth and offsets are shaped as (h*w, 3)
-        if const_offset is not None:
-            depth = self.depth_act(depth_network) * (self.zfar - self.znear) + self.znear + const_offset
+        # if const_offset is not None:
+        #     depth = depth_network * (self.zfar - self.znear) + self.znear + const_offset
+        # else:
+        #     depth = depth_network * (self.zfar - self.znear) + self.znear
+
+        if add_offset:    
+            pos = ray_origins + ray_directions * depth + offset
         else:
-            depth = self.depth_act(depth_network) * (self.zfar - self.znear) + self.znear
-
-        pos = self.ray_dirs * depth + offset
-
+            pos = ray_origins + ray_directions * depth
         return pos
     
     def training_setup(self, training_args):
