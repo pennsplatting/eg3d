@@ -30,7 +30,7 @@ class Loss:
 class StyleGAN2Loss(Loss):
     def __init__(self, device, G, D, augment_pipe=None, r1_gamma=10, style_mixing_prob=0, pl_weight=0, pl_batch_shrink=2, pl_decay=0.01, pl_no_weight_grad=False, blur_init_sigma=0, 
                  blur_fade_kimg=0, r1_gamma_init=0, r1_gamma_fade_kimg=0, neural_rendering_resolution_initial=64, neural_rendering_resolution_final=None, neural_rendering_resolution_fade_kimg=0, gpc_reg_fade_kimg=1000, gpc_reg_prob=None, dual_discrimination=False, filter_mode='antialiased',
-                 decode_first='all', reg_weight=0.1, opacity_reg= 1, l1_loss_reg = True, 
+                 decode_first='all', reg_weight=0.1, opacity_reg= 1, l1_loss_reg = True, opacity_ref_value=1, opacity_loss_choice='l1', 
                  ref_scale=None, clamp=True, use_mask=False):
         super().__init__()
         self.device             = device
@@ -103,7 +103,8 @@ class StyleGAN2Loss(Loss):
                                                     dim=1))
             img['image'] = augmented_pair[:, :img['image'].shape[1]]
             if self.use_mask:
-                img['image_mask'] = augmented_pair[:, img['image'].shape[1]:]
+                # img['image_mask'] = augmented_pair[:, img['image'].shape[1]:]
+                img['image_mask'] = img['image_mask_fg']
                 
             img['image_raw'] = torch.nn.functional.interpolate(augmented_pair[:, img['image'].shape[1]:], size=img['image_raw'].shape[2:], mode='bilinear', antialias=True)
 

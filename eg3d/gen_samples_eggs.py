@@ -19,8 +19,6 @@ import dnnlib
 import numpy as np
 import PIL.Image
 import torch
-from tqdm import tqdm
-import mrcfile
 
 
 import legacy

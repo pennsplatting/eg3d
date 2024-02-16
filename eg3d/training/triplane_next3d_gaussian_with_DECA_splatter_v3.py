@@ -14,6 +14,9 @@ from training.networks_stylegan2 import Generator as StyleGAN2Backbone
 from training.volumetric_rendering.renderer import ImportanceRenderer, sample_from_planes, generate_planes
 from training.volumetric_rendering.ray_sampler import RaySampler
 import dnnlib
+import sys
+sys.path.append('/root/zxy/eg3d/eg3d/training')
+from FLAME_PyTorch.flame_pytorch import FLAME
 
 from ipdb import set_trace as st
 import cv2
@@ -563,7 +566,7 @@ class TriPlaneGenerator(torch.nn.Module):
         splatter_resolution = self.bg_resolution
         bg_depth = self.bg_depth # this is not the actual depth since they are either on the sphere or on the half-head plane, but can be seen as a scale factor of the h & w of the bg plane.
         self.target_bg_z_value = -0.1 # the z-value of plane that intersecting the head
-
+        # self.target_bg_z_value = -self.bg_depth
         ray_origins, ray_directions = self.ray_sampler(c2w, intrisics, splatter_resolution)
         
         bg_verts = ray_origins + ray_directions * bg_depth # already in eg3d rendering space
@@ -591,44 +594,45 @@ class TriPlaneGenerator(torch.nn.Module):
 
 
     def get_flame_layer(self, config):
-        import sys
-        sys.path.append('/root/zxy/eg3d/eg3d/training')
-        from FLAME_PyTorch.flame_pytorch import FLAME
         self.flamelayer = FLAME(config)
         self.flamelayer.cuda()
 
-    def deform_vertices_from_FLAME(self):
-        # Creating a batch of mean shapes
-        shape_params = torch.rand(self.flamelayer.batch_size, 100).cuda()
-        # radian = np.pi / 180.0
-        # Creating a batch of different global poses
-        # pose_params_numpy[:, :3] : global rotaation
-        # pose_params_numpy[:, 3:] : jaw rotaation
-        # pose_params_numpy = np.array(
-        #     [
-        #         [0.0, 30.0 * radian, 0.0, 0.0, 0.0, 0.0],
-        #         [0.0, -30.0 * radian, 0.0, 0.0, 0.0, 0.0],
-        #         [0.0, 85.0 * radian, 0.0, 0.0, 0.0, 0.0],
-        #         [0.0, -48.0 * radian, 0.0, 0.0, 0.0, 0.0],
-        #         [0.0, 10.0 * radian, 0.0, 0.0, 0.0, 0.0],
-        #         [0.0, -15.0 * radian, 0.0, 0.0, 0.0, 0.0],
-        #         [0.0, 0.0 * radian, 0.0, 0.0, 0.0, 0.0],
-        #         [0.0, -0.0 * radian, 0.0, 0.0, 0.0, 0.0],
-        #     ],
-        #     dtype=np.float32,
-        # )
-        # pose_params = torch.tensor(pose_params_numpy, dtype=torch.float32).cuda()
-        pose_params = torch.zeros(self.flamelayer.batch_size, 6, dtype=torch.float32).cuda() 
+    def deform_vertices_from_FLAME(self, shape_params=None, expression_params=None):
+        with torch.no_grad():
+            if shape_params is None:
+                # Creating a batch of mean shapes
+                shape_params = torch.rand(self.flamelayer.batch_size, 100).cuda()
+                # radian = np.pi / 180.0
+                # Creating a batch of different global poses
+                # pose_params_numpy[:, :3] : global rotaation
+                # pose_params_numpy[:, 3:] : jaw rotaation
+                # pose_params_numpy = np.array(
+                #     [
+                #         [0.0, 30.0 * radian, 0.0, 0.0, 0.0, 0.0],
+                #         [0.0, -30.0 * radian, 0.0, 0.0, 0.0, 0.0],
+                #         [0.0, 85.0 * radian, 0.0, 0.0, 0.0, 0.0],
+                #         [0.0, -48.0 * radian, 0.0, 0.0, 0.0, 0.0],
+                #         [0.0, 10.0 * radian, 0.0, 0.0, 0.0, 0.0],
+                #         [0.0, -15.0 * radian, 0.0, 0.0, 0.0, 0.0],
+                #         [0.0, 0.0 * radian, 0.0, 0.0, 0.0, 0.0],
+                #         [0.0, -0.0 * radian, 0.0, 0.0, 0.0, 0.0],
+                #     ],
+                #     dtype=np.float32,
+                # )
 
-        # Cerating a batch of neutral expressions
-        expression_params = torch.rand(self.flamelayer.batch_size, 50, dtype=torch.float32).cuda()
+            # pose_params = torch.tensor(pose_params_numpy, dtype=torch.float32).cuda()
+            pose_params = torch.zeros(self.flamelayer.batch_size, 6, dtype=torch.float32).cuda() 
 
-        # Forward Pass of FLAME, one can easily use this as a layer in a Deep learning Framework
-        vertice, landmark = self.flamelayer(
-            shape_params, expression_params, pose_params
-        ) 
+            if expression_params is None:
+                # Cerating a batch of neutral expressions
+                expression_params = torch.rand(self.flamelayer.batch_size, 50, dtype=torch.float32).cuda()
+
+            # Forward Pass of FLAME, one can easily use this as a layer in a Deep learning Framework
+            vertice, landmark = self.flamelayer(
+                shape_params, expression_params, pose_params
+            ) 
         
-        vertice = self.align_flame_verts(vertice)
+            vertice = self.align_flame_verts(vertice)
         return vertice
 
     def load_face_model_DECA_splatter_v3(self):
@@ -725,13 +729,14 @@ class TriPlaneGenerator(torch.nn.Module):
             min_xy = torch.tensor([bg_verts[...,0].min(), bg_verts[...,1].min()]).to(bg_verts.device)
             max_xy = torch.tensor([bg_verts[...,0].max(), bg_verts[...,1].max()]).to(bg_verts.device)
             
-            bg_verts[...,:2] *= bg_scale
+            bg_verts[...,:2] *= 2.5
 
             bg_uv = 2 * (bg_verts[...,:2] - min_xy) / (max_xy - min_xy) - 1 # shape: torch.Size([1, 66074, 2])
             bg_uv[...,1] = -bg_uv[...,1]
            
             _opacity_bg_from_fg = F.grid_sample(_opacity_fg[None], bg_uv[None], mode='nearest', align_corners=False) # (B, C, 1, N_pts)
             blocked_mask = (_opacity_bg_from_fg>0.9).squeeze(0).squeeze(0)
+            blocked_mask = torch.zeros_like(blocked_mask).to(torch.bool)
             blocked_mask = blocked_mask.to(bg_verts.device) # [1, res*res]
 
             bg_verts_unblocked_z = torch.where( 
@@ -1080,6 +1085,7 @@ class TriPlaneGenerator(torch.nn.Module):
 
             rgb_image_batch = []
             alpha_image_batch = [] # mask
+            driven_image_batch = []
              
             if self.render_fg_bg_separately:
                 rgb_image_batch_fg = []
@@ -1093,7 +1099,14 @@ class TriPlaneGenerator(torch.nn.Module):
             
 
             bg_gaussian = GaussianModel_BG(self.sh_degree, self.bg_verts)
-            current_gaussian_batch = self.deform_vertices_from_FLAME()
+
+            shape_params = torch.eye(self.flamelayer.batch_size) * 3
+            s2 = torch.zeros(self.flamelayer.batch_size, 100-self.flamelayer.batch_size)
+            shape_params = torch.cat((shape_params, s2), 1).cuda()
+            expression_params = torch.eye(self.flamelayer.batch_size) * 3
+            e2 = torch.zeros(self.flamelayer.batch_size, 50-self.flamelayer.batch_size)
+            expression_params = torch.cat((expression_params, e2), 1).cuda()
+            current_gaussian_batch = self.deform_vertices_from_FLAME(shape_params=shape_params, expression_params=expression_params)
             
             # to save ply during G_ema eval
             _xyz_offset = None
@@ -1255,8 +1268,8 @@ class TriPlaneGenerator(torch.nn.Module):
                     # current_gaussian_with_bg = combine_list_of_gs([current_gaussian, self.bg_gaussian])
                     current_gaussian_with_bg = combine_list_of_gs([current_gaussian, bg_gaussian])
                     current_gaussian_with_bg.save_ply(gs_fname)
-                    
-                
+                    current_gaussian.save_ply(f'{gs_fname_batch}_{_gs_i:02d}_fg.ply')
+
                 # res = gs_render(self.viewpoint_camera, current_gaussian, None, self.background, override_color=override_color)
                 # res = gs_render(self.viewpoint_camera, self.bg_gaussian, None, self.background, override_color=override_color)
                 # res = gs_render_with_bg(self.viewpoint_camera, [current_gaussian, self.bg_gaussian], None, self.background, override_color=override_color)
@@ -1268,8 +1281,7 @@ class TriPlaneGenerator(torch.nn.Module):
                 ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
                 
                 rgb_image_batch.append(_rgb_image[None])
-                alpha_image_batch.append(_alpha_image[None])
-              
+                alpha_image_batch.append(_alpha_image[None])              
               
                 ## render foreground and bg separately
                 if self.render_fg_bg_separately:
@@ -1285,9 +1297,22 @@ class TriPlaneGenerator(torch.nn.Module):
                     _alpha_image_bg = 1 - res_bg["alpha"]
                     rgb_image_batch_bg.append(_rgb_image_bg[None])
                     alpha_image_batch_bg.append(_alpha_image_bg[None])
+
+                # TODO: drive by parameter
+                with torch.no_grad():
+                    shape_params = torch.zeros(self.flamelayer.batch_size, 100).cuda()
+                    shape_params[:, 0] = 3
+                    expression_params = torch.zeros(self.flamelayer.batch_size, 50, dtype=torch.float32).cuda()
+                    expression_params[:, 0] = 3
+                    new_verts = self.deform_vertices_from_FLAME(shape_params=shape_params, expression_params=expression_params)[0]
+                    test_gaussian = current_gaussian
+                    test_gaussian.update_xyz(new_verts)
+                    _driven_image = gs_render(self.viewpoint_camera, test_gaussian, None, self.background, override_color=override_color)["render"]
+                    driven_image_batch.append(_driven_image[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
+            driven_image = torch.cat(driven_image_batch)
             real_image = None
             
             if self.render_fg_bg_separately:
@@ -1336,6 +1361,11 @@ class TriPlaneGenerator(torch.nn.Module):
         if self.regularize_fg_opacity:
             synthesis_out.update({
                 'opacity_image_fg': opacity_image_fg
+                                  })
+            
+        if driven_image is not None:
+            synthesis_out.update({
+                'image_drive': driven_image
                                   })
         
         return synthesis_out

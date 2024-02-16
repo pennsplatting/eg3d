@@ -307,14 +307,14 @@ def parse_comma_separated_list(s):
 
 @click.option(
     "--optimize_eyeballpose",
-    default=True,  # False for For RingNet project
+    default=False,  # False for For RingNet project
     type=bool,
     help="If true optimize for the eyeball pose.",
 )
 
 @click.option(
     "--optimize_neckpose",
-    default=True,  # False For RingNet project
+    default=False,  # False For RingNet project
     type=bool,
     help="If true optimize for the neck pose.",
 )

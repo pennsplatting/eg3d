@@ -256,11 +256,11 @@ class GaussianModel_OffsetXYZ:
         rots[:, 0] = 1
 
         
-        if gs_training_args.opacity_lr==0:
+        # if gs_training_args.opacity_lr==0:
             # print("when no lr for opacity, init opacity to ones")
-            opacities = torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda")
-        else:
-            opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
+        opacities = torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda")
+        # else:
+        #     opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))        
@@ -356,6 +356,9 @@ class GaussianModel_OffsetXYZ:
     
     def update_xyz_offset(self, xyz_offset):
         self._xyz = self._xyz_base + xyz_offset
+    
+    def update_xyz(self, xyz):
+        self._xyz = xyz
 
     def update_opacity(self, opacity):
         self._opacity = opacity

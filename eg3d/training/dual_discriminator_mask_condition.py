@@ -178,13 +178,14 @@ class DualDiscriminator(torch.nn.Module):
         # ---------new for MHG -------
         if self.use_mask:
         
-            if img['image_mask'].shape[1] == 3:
-                img_mask = torch.mean(img['image_mask'], dim=1, keepdim=True)
-            else:
-                assert img['image_mask'].shape[1] == 1
-                # assert img['mask'].max()<=1 and img['mask'].min()>=0
-                img_mask = img['image_mask']
-            img = torch.cat((img['image'], img_mask), dim=1)
+            # if img['image_mask'].shape[1] == 3:
+            #     img_mask = torch.mean(img['image_mask'], dim=1, keepdim=True)
+            # else:
+            #     assert img['image_mask'].shape[1] == 1
+            #     # assert img['mask'].max()<=1 and img['mask'].min()>=0
+            #     img_mask = img['image_mask']
+            # img = torch.cat((img['image'], img_mask), dim=1)
+            img = torch.cat((img['image'], img['image_mask']), dim=1)
             
         else:
             img = img['image']
