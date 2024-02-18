@@ -53,10 +53,11 @@ class TriPlaneGenerator(torch.nn.Module):
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
         plane_resolution,
-        sh_degree           = 3,    # Spherical harmonics degree.
+        sh_degree           = 0,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
         rendering_kwargs    = {},
+        text_decoder_kwargs = {},   # GS TextureDecoder
         sr_kwargs = {},
         **synthesis_kwargs,         # Arguments for SynthesisNetwork.
     ):
@@ -70,19 +71,24 @@ class TriPlaneGenerator(torch.nn.Module):
         self.ray_sampler = RaySampler()
         # TODO: maybe synthesize uv texture directly with stylegan2 backbone (img_channels=3)
         # so that there's no need for decoder
-        self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=plane_resolution, img_channels=16, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
+        self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=plane_resolution, img_channels=96, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
         
-        self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=32, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
         # self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
         # self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
-        self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 3})
-        self.neural_rendering_resolution = 64
+        text_decoder_options = {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0}
+        text_decoder_options.update(text_decoder_kwargs)
+        self.text_decoder = TextureDecoder(96, text_decoder_options)
+
+        self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=self.text_decoder.out_dim, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
+        
+        self.neural_rendering_resolution = plane_resolution
+        self.plane_resolution = plane_resolution
         self.rendering_kwargs = rendering_kwargs
         
         self._last_planes = None
                 
         ### -------- gaussian splatting render --------
-        self.gaussian_splatting_use_sr = False
+        self.gaussian_splatting_use_sr = True
         self.sh_degree = sh_degree
         # self.gaussian = None
         # self.viewpoint_camera = None
@@ -98,7 +104,11 @@ class TriPlaneGenerator(torch.nn.Module):
             image_size = 512
         z_near, z_far = 0.1, 2 # TODO: find suitable value for this
         self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
-        self.gaussian = GaussianModel(self.sh_degree, plane_resolution)
+        self.gaussian = GaussianModel(self.sh_degree, plane_resolution**2)
+
+        white_background = True
+        bg_color = [1,1,1] if white_background else [0, 0, 0]
+        self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
     
         
     def mapping(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
@@ -167,16 +177,19 @@ class TriPlaneGenerator(torch.nn.Module):
         else:
             
             ### ----- gaussian splatting -----
-            feature_gen_batch = planes.permute(0, 2, 3, 1) # (B, K, H, W) -> (B, H, W, K)
+
+            feature_image = self.text_decoder(planes)
+            B, K, H, W = feature_image.shape
+            feature_gen_batch = feature_image.permute(0,2,3,1).reshape(B, H*W, K).contiguous()
             rgb_image_batch = []
             alpha_image_batch = [] # mask
 
-            ray_origins, ray_directions = self.ray_sampler(cam2world_matrix, intrinsics, 128)
-            # raterization
-            white_background = True
-            bg_color = [1,1,1] if white_background else [0, 0, 0]
-            background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-            
+            if self.gaussian_splatting_use_sr:
+                ray_origins, ray_directions = self.ray_sampler(cam2world_matrix, intrinsics, self.neural_rendering_resolution)
+            else:
+                ray_origins, ray_directions = self.ray_sampler(cam2world_matrix, intrinsics, self.plane_resolution)
+
+
             # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
             
             for _cam2world_matrix, feature_gen, _ray_origins, _ray_directions in zip(cam2world_matrix, feature_gen_batch, ray_origins, ray_directions):
@@ -187,8 +200,43 @@ class TriPlaneGenerator(torch.nn.Module):
                 # textures.requires_grad_(True) 
                 # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
                 
-                self.gaussian.update(feature_gen, _ray_origins, _ray_directions)
-                res = gs_render(self.viewpoint_camera, self.gaussian, None, background)
+                # self.gaussian.update(feature_gen, _ray_origins, _ray_directions)
+                start_dim = 0
+                _depth = feature_gen[:,start_dim:start_dim+1]
+                self.gaussian.update_xyz(_depth, _ray_origins, _ray_directions)
+                start_dim += 1
+
+                if self.text_decoder.options['gen_rgb']:
+                    _rgb = feature_gen[:,start_dim:start_dim+3]
+                    start_dim += 3
+                    self.gaussian.update_rgb_textures(_rgb)
+                
+                if self.text_decoder.options['gen_sh']:
+                    _sh = feature_gen[:,start_dim:start_dim+3]
+                    start_dim += 3
+                    self.gaussian.update_sh_texture(_sh)
+                
+                if self.text_decoder.options['gen_opacity']:
+                    _opacity = feature_gen[:,start_dim:start_dim+1] # should be no adjustment for sigmoid
+                    start_dim += 1
+                    self.gaussian.update_opacity(_opacity)
+                
+                if self.text_decoder.options['gen_scaling']:
+                    _scaling = feature_gen[:,start_dim:start_dim+3]
+                    self.gaussian.update_scaling(_scaling, max_s = self.text_decoder.options['max_scaling'], min_s = self.text_decoder.options['min_scaling'])
+                    start_dim += 3
+                    
+                if self.text_decoder.options['gen_rotation']:
+                    _rotation = feature_gen[:,start_dim:start_dim+4]
+                    self.gaussian.update_rotation(_rotation)
+                    start_dim += 4
+                
+                if self.text_decoder.options['gen_xyz_offset']:
+                    _xyz_offset = feature_gen[:,start_dim:start_dim+3]
+                    self.gaussian.update_xyz_offset(_xyz_offset)
+                    start_dim += 3
+                            
+                res = gs_render(self.viewpoint_camera, self.gaussian, None, self.background)
                 _rgb_image = res["render"]
                 _alpha_image = res["alpha"]
                 ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
@@ -200,7 +248,7 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
             ## FIXME: try different normalization method to normalize rgb image to [-1,1]
-            # rgb_image = (rgb_image - 0.5) * 2
+            rgb_image = (rgb_image - 0.5) * 2
 
             # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")
             
@@ -210,7 +258,7 @@ class TriPlaneGenerator(torch.nn.Module):
             ## TODO: the below superresolution shall be kept?
             ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?
             if self.gaussian_splatting_use_sr:
-                sr_image = self.superresolution(rgb_image, feature_gen_batch, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+                sr_image = self.superresolution(rgb_image, feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
             else:
                 sr_image = rgb_image
                 rgb_image = rgb_image[:,:,::8, ::8] # TODO: FIXME change this downsample to a smoother gaussian filtering
@@ -282,10 +330,19 @@ class TextureDecoder(torch.nn.Module):
         super().__init__()
         self.hidden_dim = 64
 
+        self.options = options
+        self.out_dim = 1 + 3 * options['gen_rgb'] + 3 * options['gen_sh'] + 1 * options['gen_opacity'] + 3 * options['gen_scaling'] + 4 * options['gen_rotation'] + 3 * options['gen_xyz_offset']
+        self.xyz_offset_scale = options['xyz_offset_scale']
+        self.depth_bias = options['depth_bias']
+        self.depth_factor = options['depth_factor']
+        self.scale_bias = options['scale_bias']
+        self.scale_factor = options['scale_factor']
+        print(f"scale_bias: {self.scale_bias}, scale_factor:{self.scale_factor}")
+
         self.net = torch.nn.Sequential(
             FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
             torch.nn.Softplus(),
-            FullyConnectedLayer(self.hidden_dim, options['decoder_output_dim'], lr_multiplier=options['decoder_lr_mul'])
+            FullyConnectedLayer(self.hidden_dim, self.out_dim, lr_multiplier=options['decoder_lr_mul'])
         )
         
     def forward(self, sampled_features):
@@ -298,9 +355,50 @@ class TextureDecoder(torch.nn.Module):
         x = x.reshape(N*H*W, C)
         
         x = self.net(x)
-        
-        ## added sigmoid to make x in range 0~1
-        x = torch.sigmoid(x)*(1 + 2*0.001) - 0.001
-    
         x = x.reshape(N, H, W, -1)
-        return x.permute(0, 3, 1, 2)
+
+        start_dim = 0
+        out = {}
+
+        out['depth'] = self.depth_bias + self.depth_factor * torch.nn.functional.normalize(x[..., start_dim:start_dim+1])
+        start_dim += 1
+
+        if self.options['gen_rgb']:
+            out['rgb'] = torch.sigmoid(x[..., start_dim:start_dim+3])*(1 + 2*0.001) - 0.001
+            start_dim += 3
+        
+        if self.options['gen_sh']:
+            out['sh'] = x[..., start_dim:start_dim+3]
+            start_dim += 3
+        
+        if self.options['gen_opacity']:
+            
+            out['opacity'] = x[..., start_dim:start_dim+1] # should be no adjustment for sigmoid
+            # if self.fix_opacity is not None:
+            #     out['opacity'] = self.fix_opacity * torch.ones_like(out['opacity'])
+            start_dim += 1
+        
+        if self.options['gen_scaling']:
+            out['scaling'] = self.scale_bias + self.scale_factor * x[..., start_dim:start_dim+3].reshape(-1,3).reshape(N, H, W, 3)
+            start_dim += 3
+            
+        if self.options['gen_rotation']:
+            out['rotation'] = x[..., start_dim:start_dim+4].reshape(-1,4).reshape(N, H, W, 4) # check consistency before/after normalize: passed. Use: x[2,2,3,7:11]/out['rotation'][2,:,2,3]
+            start_dim += 4
+        
+        if self.options['gen_xyz_offset']:
+            # if self.xyz_offset_act == 'normalize':
+            out['xyz_offset'] = self.xyz_offset_scale * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]) # TODO: whether use this normalize? May constrain the offset not deviate too much
+            # elif self.xyz_offset_act == 'clamp':
+            #     out['xyz_offset'] = torch.clamp(x[..., start_dim:start_dim+3], max = self.xyz_offset_scale, min = -self.xyz_offset_scale) # TODO: whether use this normalize? May constrain the offset not deviate too much
+            start_dim += 3
+
+
+        # x.permute(0, 3, 1, 2)
+        for key, v in out.items():
+            # print(f"{key}:{v.shape}")
+            out[key] = v.permute(0, 3, 1, 2)
+            # print(f"{key} reshape to -> :{out[key].shape}")
+
+        out_planes = torch.cat([v for key, v in out.items()] ,dim=1)
+        return out_planes

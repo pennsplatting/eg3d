@@ -24,6 +24,28 @@ from training.gaussian_splatting.utils.general_utils import strip_symmetric, bui
 
 from ipdb import set_trace as st
 
+from training.gaussian_splatting.arguments import ModelParams, PipelineParams, OptimizationParams
+from argparse import ArgumentParser, Namespace
+## args to setup training for gaussians
+parser = ArgumentParser(description="Training script parameters")
+# lp = ModelParams(parser)
+op = OptimizationParams(parser)
+# pp = PipelineParams(parser)
+parser.add_argument('--ip', type=str, default="127.0.0.1")
+parser.add_argument('--port', type=int, default=6009)
+parser.add_argument('--debug_from', type=int, default=-1)
+parser.add_argument('--detect_anomaly', action='store_true', default=False)
+parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
+parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
+parser.add_argument("--quiet", action="store_true")
+parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
+parser.add_argument("--start_checkpoint", type=str, default = None)
+args = parser.parse_args([])
+args.save_iterations.append(args.iterations)
+
+gs_training_args = op.extract(args)
+print(f"gs_training_args: {vars(gs_training_args)}")
+
 def print_grad(name, grad):
     print(f"{name}:")
     if torch.all(grad==0):
@@ -49,11 +71,10 @@ class GaussianModel:
         self.depth_act = nn.Sigmoid()
 
 
-    def __init__(self, sh_degree : int, img_resolution):
+    def __init__(self, sh_degree : int, V):
         # self.active_sh_degree = 0
         self.active_sh_degree = sh_degree
         self.max_sh_degree = sh_degree  
-        self.img_resolution = img_resolution
         self.znear = 0.1
         self.zfar = 2
         self._xyz = torch.empty(0)
@@ -68,8 +89,9 @@ class GaussianModel:
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
-        self.ray_dirs = torch.empty(0)
+        # self.ray_dirs = torch.empty(0)
         self.setup_functions()
+        self.training_setup(gs_training_args)
         # self.init_ray_dirs()
 
     def capture(self):
@@ -108,6 +130,9 @@ class GaussianModel:
 
     @property
     def get_scaling(self):
+        if (self.max_s is not None) or (self.min_s is not None):
+            return self.scaling_activation(torch.clamp(self._scaling, max=self.max_s, min=self.min_s))
+        
         return self.scaling_activation(self._scaling)
     
     @property
@@ -202,25 +227,26 @@ class GaussianModel:
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
-        
+
     def update(self, feature, ray_origins, ray_directions):
-        H, W, K = feature.shape
-        feature = feature.reshape(H*W, K)
-        depth = feature[:, 0:1]
-        offset = feature[:, 1:4]
+        # depth = feature[:, 0:1]
+        # offset = feature[:, 1:4]
         # opacity = feature[:, 4:5]
         # scaling = feature[:, 5:8] 
         # rotation = feature[:, 8:12]
         # features_dc = feature[:,12:15].unsqueeze(2)
         
-        self._xyz = self.get_pos(depth, offset, ray_origins, ray_directions)
+        self._xyz = self.get_pos(feature[:, 0:1], feature[:, 1:4], ray_origins, ray_directions)
         self._scaling = feature[:, 5:8] 
         self._rotation = feature[:, 8:12]
         self._opacity = feature[:, 4:5]
-        self._features_dc = feature[:,12:15].unsqueeze(2).transpose(1, 2).contiguous()
-        self._features_rest = torch.zeros((H*W, 15, 3), device="cuda")
+        rgb = torch.zeros((self._xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        rgb[:,:3, 0] = RGB2SH(feature[:,12:15]) # (53215, 3): 0~1 -> -1.7~+1.7
+        rgb[:, 3:, 1:] = 0.0
+        self._features_dc = rgb[:,:,0:1].transpose(1, 2).contiguous()
+        self._features_rest = rgb[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True)
         # st()
-        
+
     # def init_ray_dirs(self):
     #     x = torch.linspace(-self.img_resolution // 2 + 0.5, 
     #                         self.img_resolution // 2 - 0.5, 
@@ -240,19 +266,60 @@ class GaussianModel:
     #     self.ray_dirs = ray_dirs
         
         
-    def get_pos(self, depth, offset, ray_origins, ray_directions, const_offset=None, add_offset=False):
-        # depth and offsets are shaped as (h*w, 3)
-        # if const_offset is not None:
-        #     depth = depth_network * (self.zfar - self.znear) + self.znear + const_offset
-        # else:
-        #     depth = depth_network * (self.zfar - self.znear) + self.znear
+    # def get_pos(self, depth, ray_origins, ray_directions, const_offset=None):
+    #     # depth and offsets are shaped as (h*w, 3)
+    #     # if const_offset is not None:
+    #     #     depth = depth_network * (self.zfar - self.znear) + self.znear + const_offset
+    #     # else:
+    #     #     depth = depth_network * (self.zfar - self.znear) + self.znear
 
-        if add_offset:    
-            pos = ray_origins + ray_directions * depth + offset
-        else:
-            pos = ray_origins + ray_directions * depth
-        return pos
+    #     pos = ray_origins + ray_directions * depth
+    #     return pos
     
+    def update_sh_texture(self, feature_uv):
+        V, C = feature_uv.shape 
+        features = feature_uv.reshape(V,3,C//3).contiguous() # [V, 3, C']
+       
+        self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True) # [V, 1, 3]
+        self._features_rest = features[:,:,1:].transpose(1, 2).contiguous()#.requires_grad_(True)# [V, sh degree - 1, 3]
+    
+    def update_xyz_offset(self, xyz_offset):
+        # self._xyz = self._xyz_base + xyz_offset
+        self._xyz += xyz_offset
+    
+    def update_xyz(self, depth, ray_origins, ray_directions):
+        self._xyz = ray_origins + ray_directions * depth
+
+    def update_opacity(self, opacity):
+        self._opacity = opacity
+
+    def update_scaling(self, scaling, max_s=None, min_s=None):  
+        # clamp settings
+        self.max_s = max_s
+        self.min_s = min_s
+        
+        # update
+        self._scaling = scaling
+    
+    def update_rotation(self, rotation):
+        self._rotation = rotation
+
+        
+    ## for assigning rgb texture to G.debug_gaussian. Not for other gaussians
+    def update_rgb_textures(self, feature_uv):
+        '''
+            feature_uv: [Npts, 3]
+        '''
+
+        features = torch.zeros((self._xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        ## FIXME: although all features are mapped from RGB[0,1] to SH now, the original GS uses 0 for self._feature_rest
+        features[:,:3, 0] = RGB2SH(feature_uv) # (53215, 3): 0~1 -> -1.7~+1.7
+        features[:, 3:, 1:] = 0.0
+
+        # self._xyz = nn.Parameter(xyz.clone().detach().to(torch.float32).requires_grad_(False))
+        self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True)
+        self._features_rest = features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True)
+
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -268,10 +335,10 @@ class GaussianModel:
         ]
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
-        self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
-                                                    lr_final=training_args.position_lr_final*self.spatial_lr_scale,
-                                                    lr_delay_mult=training_args.position_lr_delay_mult,
-                                                    max_steps=training_args.position_lr_max_steps)
+        # self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
+        #                                             lr_final=training_args.position_lr_final*self.spatial_lr_scale,
+        #                                             lr_delay_mult=training_args.position_lr_delay_mult,
+        #                                             max_steps=training_args.position_lr_max_steps)
 
     def update_learning_rate(self, iteration):
         ''' Learning rate scheduling per step '''

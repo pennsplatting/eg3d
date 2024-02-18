@@ -412,9 +412,9 @@ def training_loop(
                 snapshot_data[name] = module
                 del module # conserve memory
             snapshot_pkl = os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl')
-            # if rank == 0:
-            #     with open(snapshot_pkl, 'wb') as f:
-            #         pickle.dump(snapshot_data, f)
+            if rank == 0:
+                with open(snapshot_pkl, 'wb') as f:
+                    pickle.dump(snapshot_data, f)
 
         # # Evaluate metrics.
         # if (snapshot_data is not None) and (len(metrics) > 0):

@@ -21,7 +21,6 @@ import numpy as np
 import scipy.interpolate
 import torch
 from tqdm import tqdm
-import mrcfile
 
 import legacy
 

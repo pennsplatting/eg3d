@@ -176,6 +176,22 @@ def parse_comma_separated_list(s):
 @click.option('--neural_rendering_resolution_final', help='Final resolution to render at, if blending', metavar='INT',  type=click.IntRange(min=1), required=False, default=None)
 @click.option('--neural_rendering_resolution_fade_kimg', help='Kimg to blend resolution over', metavar='INT',  type=click.IntRange(min=0), required=False, default=1000, show_default=True)
 
+# GS texture decoder options
+@click.option('--gs_gen_rgb', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--gs_gen_sh', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
+@click.option('--gs_gen_opacity', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--gs_gen_scaling', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--gs_gen_rotation', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
+@click.option('--gs_gen_xyz_offset', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
+@click.option('--gs_xyz_offset_scale',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=6.e-06, required=False, show_default=True)
+@click.option('--gs_max_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-4, required=False, show_default=True)
+@click.option('--gs_min_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-7, required=False, show_default=True)
+@click.option('--gs_scale_bias',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-5, required=False, show_default=True)
+@click.option('--gs_scale_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
+@click.option('--gs_depth_bias',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=2, required=False, show_default=True)
+@click.option('--gs_depth_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
+
+
 @click.option('--blur_fade_kimg', help='Blur over how many', metavar='INT',  type=click.IntRange(min=1), required=False, default=200)
 @click.option('--gen_pose_cond', help='If true, enable generator pose conditioning.', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--c-scale', help='Scale factor for generator pose conditioning.', metavar='FLOAT',  type=click.FloatRange(min=0), required=False, default=1)
@@ -279,6 +295,12 @@ def main(**kwargs):
     c.G_kwargs.fused_modconv_default = 'inference_only' # Speed up training by using regular convolutions instead of grouped convolutions.
     c.loss_kwargs.filter_mode = 'antialiased' # Filter mode for raw images ['antialiased', 'none', float [0-1]]
     c.D_kwargs.disc_c_noise = opts.disc_c_noise # Regularization for discriminator pose conditioning
+
+    ## GS Texture Decoder options
+    text_decoder_options = {'gen_rgb':opts.gs_gen_rgb, 'gen_sh':opts.gs_gen_sh, 'gen_opacity':opts.gs_gen_opacity, 'gen_scaling':opts.gs_gen_scaling, 'gen_rotation':opts.gs_gen_rotation, 'gen_xyz_offset':opts.gs_gen_xyz_offset,
+                            'max_scaling':opts.gs_max_scaling, 'min_scaling':opts.gs_min_scaling, 'xyz_offset_scale':opts.gs_xyz_offset_scale,
+                            'depth_bias':opts.gs_depth_bias, 'depth_factor':opts.gs_depth_factor, 'scale_bias':opts.gs_scale_bias, 'scale_factor':opts.gs_scale_factor}
+    c.G_kwargs.text_decoder_kwargs = text_decoder_options
 
     if c.training_set_kwargs.resolution == 512:
         sr_module = 'training.superresolution.SuperresolutionHybrid8XDC'
