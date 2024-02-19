@@ -71,7 +71,7 @@ class GaussianModel:
         self.depth_act = nn.Sigmoid()
 
 
-    def __init__(self, sh_degree : int, V):
+    def __init__(self, sh_degree : int, verts=None):
         # self.active_sh_degree = 0
         self.active_sh_degree = sh_degree
         self.max_sh_degree = sh_degree  
@@ -89,10 +89,12 @@ class GaussianModel:
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
-        # self.ray_dirs = torch.empty(0)
+        self.max_s = None
+        self.min_s = None
         self.setup_functions()
+        if verts is not None:
+            self.init_point_cloud(verts)
         self.training_setup(gs_training_args)
-        # self.init_ray_dirs()
 
     def capture(self):
         return (
@@ -190,6 +192,32 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
     
+    def init_point_cloud(self, verts):
+        # TODO: freeze some parameters, like self._xyz?
+        self._xyz = verts
+        self.spatial_lr_scale = 0 # FIXME: hardcoded from original GS implementation, explained by authors in issue
+        features = torch.zeros((self._xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+
+        dist2 = torch.clamp_min(distCUDA2(self._xyz.to(torch.float32)), 0.0000001) ## TODO:FIXME HOW is this param 0.0000001 determined?
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3) 
+        # 3DMM: min: -8.0590, max: -4.3734, mode: -7~-6 (may be wrong, use " scales.mode().values.max() " to check)
+        # DECA: min: -7.3208, max: -3.4435, mode: -7.32 ~ -3.44 (checked)
+        rots = torch.zeros((self._xyz.shape[0], 4), device="cuda")
+        rots[:, 0] = 1
+
+        
+        # if gs_training_args.opacity_lr==0:
+            # print("when no lr for opacity, init opacity to ones")
+        opacities = torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda")
+        # else:
+        #     opacities = inverse_sigmoid(0.1 * torch.ones((self._xyz.shape[0], 1), dtype=torch.float, device="cuda"))
+        self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
+        self._scaling = nn.Parameter(scales.requires_grad_(True))
+        self._rotation = nn.Parameter(rots.requires_grad_(True))
+        self._opacity = nn.Parameter(opacities.requires_grad_(True))        
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+
     # for test
     def update_textures(self, feature_uv):
         N, C, _ , V = feature_uv.shape # (1, 48, 1, 5023)
@@ -228,24 +256,24 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-    def update(self, feature, ray_origins, ray_directions):
-        # depth = feature[:, 0:1]
-        # offset = feature[:, 1:4]
-        # opacity = feature[:, 4:5]
-        # scaling = feature[:, 5:8] 
-        # rotation = feature[:, 8:12]
-        # features_dc = feature[:,12:15].unsqueeze(2)
+    # def update(self, feature, ray_origins, ray_directions):
+    #     # depth = feature[:, 0:1]
+    #     # offset = feature[:, 1:4]
+    #     # opacity = feature[:, 4:5]
+    #     # scaling = feature[:, 5:8] 
+    #     # rotation = feature[:, 8:12]
+    #     # features_dc = feature[:,12:15].unsqueeze(2)
         
-        self._xyz = self.get_pos(feature[:, 0:1], feature[:, 1:4], ray_origins, ray_directions)
-        self._scaling = feature[:, 5:8] 
-        self._rotation = feature[:, 8:12]
-        self._opacity = feature[:, 4:5]
-        rgb = torch.zeros((self._xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
-        rgb[:,:3, 0] = RGB2SH(feature[:,12:15]) # (53215, 3): 0~1 -> -1.7~+1.7
-        rgb[:, 3:, 1:] = 0.0
-        self._features_dc = rgb[:,:,0:1].transpose(1, 2).contiguous()
-        self._features_rest = rgb[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True)
-        # st()
+    #     self._xyz = self.get_pos(feature[:, 0:1], feature[:, 1:4], ray_origins, ray_directions)
+    #     self._scaling = feature[:, 5:8] 
+    #     self._rotation = feature[:, 8:12]
+    #     self._opacity = feature[:, 4:5]
+    #     rgb = torch.zeros((self._xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+    #     rgb[:,:3, 0] = RGB2SH(feature[:,12:15]) # (53215, 3): 0~1 -> -1.7~+1.7
+    #     rgb[:, 3:, 1:] = 0.0
+    #     self._features_dc = rgb[:,:,0:1].transpose(1, 2).contiguous()
+    #     self._features_rest = rgb[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True)
+    #     # st()
 
     # def init_ray_dirs(self):
     #     x = torch.linspace(-self.img_resolution // 2 + 0.5, 

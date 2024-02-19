@@ -12,7 +12,6 @@ import torch
 from torch_utils import persistence
 from training.networks_stylegan2 import Generator as StyleGAN2Backbone
 from training.volumetric_rendering.renderer import ImportanceRenderer
-# from training.volumetric_rendering.renderer_3dmm import ImportanceRenderer ##replace with splatting renderer later
 from training.volumetric_rendering.ray_sampler import RaySampler
 import dnnlib
 
@@ -43,7 +42,59 @@ def print_grad(name, grad):
         return 
     # print(grad)
     print('\t',grad.max(), grad.min(), grad.mean())
-    
+
+def load_obj(obj_filename):
+    """ Ref: https://github.com/facebookresearch/pytorch3d/blob/25c065e9dafa90163e7cec873dbb324a637c68b7/pytorch3d/io/obj_io.py
+    Load a mesh from a file-like object.
+    """
+    with open(obj_filename, 'r') as f:
+        lines = [line.strip() for line in f]
+
+    verts, uvcoords = [], []
+    faces, uv_faces = [], []
+    # startswith expects each line to be a string. If the file is read in as
+    # bytes then first decode to strings.
+    if lines and isinstance(lines[0], bytes):
+        lines = [el.decode("utf-8") for el in lines]
+
+    for line in lines:
+        tokens = line.strip().split()
+        if line.startswith("v "):  # Line is a vertex.
+            vert = [float(x) for x in tokens[1:4]]
+            if len(vert) != 3:
+                msg = "Vertex %s does not have 3 values. Line: %s"
+                raise ValueError(msg % (str(vert), str(line)))
+            verts.append(vert)
+        elif line.startswith("vt "):  # Line is a texture.
+            tx = [float(x) for x in tokens[1:3]]
+            if len(tx) != 2:
+                raise ValueError(
+                    "Texture %s does not have 2 values. Line: %s" % (str(tx), str(line))
+                )
+            uvcoords.append(tx)
+        elif line.startswith("f "):  # Line is a face.
+            # Update face properties info.
+            face = tokens[1:]
+            face_list = [f.split("/") for f in face]
+            for vert_props in face_list:
+                # Vertex index.
+                faces.append(int(vert_props[0]))
+                if len(vert_props) > 1:
+                    if vert_props[1] != "":
+                        # Texture index is present e.g. f 4/1/1.
+                        uv_faces.append(int(vert_props[1]))
+
+    verts = torch.tensor(verts, dtype=torch.float32)
+    uvcoords = torch.tensor(uvcoords, dtype=torch.float32)
+    faces = torch.tensor(faces, dtype=torch.long); faces = faces.reshape(-1, 3) - 1
+    uv_faces = torch.tensor(uv_faces, dtype=torch.long); uv_faces = uv_faces.reshape(-1, 3) - 1
+    return (
+        verts,
+        uvcoords,
+        faces,
+        uv_faces
+    )
+
 @persistence.persistent_class
 class TriPlaneGenerator(torch.nn.Module):
     def __init__(self,
@@ -90,6 +141,8 @@ class TriPlaneGenerator(torch.nn.Module):
         ### -------- gaussian splatting render --------
         self.gaussian_splatting_use_sr = True
         self.sh_degree = sh_degree
+        self.load_face_model()
+        self.depth_cutoff = 2.2 # TODO: cut off head template depth, maybe 2.3-2.4
         # self.gaussian = None
         # self.viewpoint_camera = None
         
@@ -101,16 +154,45 @@ class TriPlaneGenerator(torch.nn.Module):
         if self.gaussian_splatting_use_sr:
             image_size = self.neural_rendering_resolution # chekc
         else:
-            image_size = 512
-        z_near, z_far = 0.1, 2 # TODO: find suitable value for this
-        self.viewpoint_camera = MiniCam(image_size, image_size, z_near, z_far)
-        self.gaussian = GaussianModel(self.sh_degree, plane_resolution**2)
+            image_size = img_resolution
+        self.z_near = 0.1
+        self.z_far = 4 # TODO: find suitable value for this
+        self.viewpoint_camera = MiniCam(image_size, image_size, self.z_near, self.z_far)
+        self.gaussian = GaussianModel(self.sh_degree)
 
         white_background = True
         bg_color = [1,1,1] if white_background else [0, 0, 0]
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-    
+
+    def load_face_model(self):
+        obj_path = '/root/zxy/data/head_template_5023_align.obj'
+        verts, _, _, _  = load_obj(obj_path)
+        ### normalize to eg3d
+        verts = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+        verts = torch.tensor(verts, dtype=torch.float, device='cuda')
+        self.register_buffer('verts', verts)
+        # self.face_model = GaussianModel(self.sh_degree, verts)
+
+    def depth_of_object(self):
+        # Transform object coordinates to camera coordinates
+        object_coords_homogeneous = torch.cat((self.verts, torch.ones((self.verts.shape[0], 1), dtype=torch.float32, device='cuda')), dim=1)
+
+        # # Apply perspective projection
+        projected_coords = torch.matmul(object_coords_homogeneous, self.viewpoint_camera.full_proj_transform)
+
+        # Normalize points to image coordinates
+        projected_coords[:,:2] = (projected_coords[:,:2] + 1) * torch.tensor([self.viewpoint_camera.image_width, self.viewpoint_camera.image_height], device='cuda')[None, :] / 2
         
+        # Initialize depth image with maximum depth value
+        depth_image = torch.full((self.viewpoint_camera.image_height, self.viewpoint_camera.image_width), self.z_near, dtype=torch.float32, device='cuda')
+        # Calculate depth for each projected point and update depth image
+        for i in range(self.verts.shape[0]):
+            u, v = projected_coords[i, :2].round().int()
+            if 0 <= u < self.viewpoint_camera.image_width and 0 <= v < self.viewpoint_camera.image_height:
+                # depth = (2 * self.z_far * self.z_near) / (self.z_far + self.z_near - projected_coords[i, 2] * (self.z_far - self.z_near))
+                depth_image[v, u] = min(projected_coords[i, 2], depth_image[v, u])
+        return depth_image
+
     def mapping(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
         if self.rendering_kwargs['c_gen_conditioning_zero']:
             c = torch.zeros_like(c)
@@ -187,8 +269,7 @@ class TriPlaneGenerator(torch.nn.Module):
             if self.gaussian_splatting_use_sr:
                 ray_origins, ray_directions = self.ray_sampler(cam2world_matrix, intrinsics, self.neural_rendering_resolution)
             else:
-                ray_origins, ray_directions = self.ray_sampler(cam2world_matrix, intrinsics, self.plane_resolution)
-
+                ray_origins, ray_directions = self.ray_sampler(cam2world_matrix, intrinsics, self.img_resolution)
 
             # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
             
@@ -200,9 +281,20 @@ class TriPlaneGenerator(torch.nn.Module):
                 # textures.requires_grad_(True) 
                 # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
                 
-                # self.gaussian.update(feature_gen, _ray_origins, _ray_directions)
+                # TODO: project head template onto image plane, and replace depth accordingly
+                with torch.no_grad(): # NOTE: do not update head template
+                    # FIXME: this may not be the best way to get depth, because the edge is not clean 
+                    # depth_image = gs_render(self.viewpoint_camera, self.face_model, None, self.background)["depth"] # [1, H, W]
+                    # depth_image = depth_image.permute(1,2,0).reshape(-1, 1).contiguous()
+                    depth_image = self.depth_of_object()
+                    depth_image = depth_image.reshape(-1, 1)
+
                 start_dim = 0
-                _depth = feature_gen[:,start_dim:start_dim+1]
+                # _depth = feature_gen[:,start_dim:start_dim+1] 
+                _depth = torch.where(
+                    depth_image > self.depth_cutoff,
+                    depth_image, # if true 
+                    feature_gen[:,start_dim:start_dim+1]) # if false
                 self.gaussian.update_xyz(_depth, _ray_origins, _ray_directions)
                 start_dim += 1
 
