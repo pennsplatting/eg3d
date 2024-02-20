@@ -96,8 +96,8 @@ class MiniCam(nn.Module):
         
     def update_transforms2(self, intrinsics, c2w, device=None):
         # intrinsics are normalized by image size, rather than in pixel units
-        self.FoVx = 2*torch.arctan(1/(2*intrinsics[0,0,0]))
-        self.FoVy = 2*torch.arctan(1/(2*intrinsics[0,1,1]))
+        self.FoVx = 2*torch.arctan(1/(2*intrinsics[0,0]))
+        self.FoVy = 2*torch.arctan(1/(2*intrinsics[1,1]))
         self.projection_matrix = getProjectionMatrix(self.znear, self.zfar, self.FoVx, self.FoVy).transpose(0, 1).to(c2w.device)
         
         if not torch.all(c2w==0): 
