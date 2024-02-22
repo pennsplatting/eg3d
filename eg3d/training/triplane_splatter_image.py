@@ -139,10 +139,10 @@ class TriPlaneGenerator(torch.nn.Module):
         self._last_planes = None
                 
         ### -------- gaussian splatting render --------
-        self.gaussian_splatting_use_sr = False
+        self.gaussian_splatting_use_sr = True
         self.sh_degree = sh_degree
         self.load_face_model()
-        self.depth_cutoff = 2.3 # TODO: cut off head template depth, maybe 2.3-2.4
+        self.depth_cutoff = 2.4 # TODO: cut off head template depth, maybe 2.3-2.4
         # self.gaussian = None
         # self.viewpoint_camera = None
         
