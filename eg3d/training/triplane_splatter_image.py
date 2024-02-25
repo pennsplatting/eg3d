@@ -130,7 +130,7 @@ class TriPlaneGenerator(torch.nn.Module):
         text_decoder_options.update(text_decoder_kwargs)
         self.text_decoder = TextureDecoder(96, text_decoder_options)
 
-        self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=3, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
+        self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=self.text_decoder.out_dim, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
         
         self.neural_rendering_resolution = 64
         self.plane_resolution = plane_resolution
@@ -139,7 +139,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self._last_planes = None
                 
         ### -------- gaussian splatting render --------
-        self.gaussian_splatting_use_sr = True
+        self.gaussian_splatting_use_sr = False
         self.sh_degree = sh_degree
         self.load_face_model()
         self.depth_cutoff = 2.4 # TODO: cut off head template depth, maybe 2.3-2.4
@@ -168,7 +168,8 @@ class TriPlaneGenerator(torch.nn.Module):
         self.viewpoint_camera2 = MiniCam(plane_resolution, plane_resolution, self.z_near, self.z_far)
 
     def load_face_model(self):
-        obj_path = '/root/zxy/data/head_template_5023_align.obj'
+        # obj_path = '/root/zxy/data/head_template_5023_align.obj'
+        obj_path = '/home/zxy/eg3d/eg3d/data/head_template_5023_align.obj'
         verts, _, _, _  = load_obj(obj_path)
         ### normalize to eg3d
         verts = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
@@ -365,7 +366,7 @@ class TriPlaneGenerator(torch.nn.Module):
             ## TODO: the below superresolution shall be kept?
             ## currently keeping the sr module below. TODO: shall we replace the feature image by texture_uv_map or only the sampled parts?
             if self.gaussian_splatting_use_sr:
-                sr_image = self.superresolution(rgb_image, rgb_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
+                sr_image = self.superresolution(rgb_image, feature_image, ws, noise_mode=self.rendering_kwargs['superresolution_noise_mode'], **{k:synthesis_kwargs[k] for k in synthesis_kwargs.keys() if k != 'noise_mode'})
             else:
                 sr_image = rgb_image
                 rgb_image = rgb_image[:,:,::8, ::8] # TODO: FIXME change this downsample to a smoother gaussian filtering
