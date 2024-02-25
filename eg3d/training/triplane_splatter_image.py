@@ -138,11 +138,8 @@ class TriPlaneGenerator(torch.nn.Module):
         
         self._last_planes = None
                 
-        ### -------- gaussian splatting render --------
         self.gaussian_splatting_use_sr = False
         self.sh_degree = sh_degree
-        self.load_face_model()
-        self.depth_cutoff = 2.4 # TODO: cut off head template depth, maybe 2.3-2.4
         # self.gaussian = None
         # self.viewpoint_camera = None
         
@@ -159,13 +156,30 @@ class TriPlaneGenerator(torch.nn.Module):
         self.z_far = 4 # TODO: find suitable value for this
         self.viewpoint_camera = MiniCam(image_size, image_size, self.z_near, self.z_far)
         self.gaussian = GaussianModel(self.sh_degree)
+        
+        ### -------- gaussian splatting render --------
+        self.load_face_model()
+        
+        self.viewpoint_camera2 = MiniCam(plane_resolution, plane_resolution, self.z_near, self.z_far)
+        c2w_gen = torch.eye(4)[None].to('cuda')
+        c2w_gen[:,1:3] *= -1 # lookat: neg z
+        c2w_gen[:,2,3] = 2.69 # z position
+        intrinsics_gen = torch.tensor([[[2.5000, 0.0000, 0.5000],
+                                        [0.0000, 2.5000, 0.5000],
+                                        [0.0000, 0.0000, 1.0000]]]).to('cuda')
+
+        self.ray_origins, self.ray_directions = self.ray_sampler(c2w_gen, intrinsics_gen, self.plane_resolution)
+        self.ray_origins = self.ray_origins[0]
+        self.ray_directions = self.ray_directions[0]
+        
+        self.viewpoint_camera2.update_transforms2(intrinsics_gen[0], c2w_gen[0])
+        self.depth_of_object()
+        
+        # self.depth_cutoff = 2.4 # TODO: cut off head template depth, maybe 2.3-2.4
 
         white_background = True
         bg_color = [1,1,1] if white_background else [0, 0, 0]
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-
-        ### -------- depth image --------
-        self.viewpoint_camera2 = MiniCam(plane_resolution, plane_resolution, self.z_near, self.z_far)
 
     def load_face_model(self):
         # obj_path = '/root/zxy/data/head_template_5023_align.obj'
@@ -175,27 +189,30 @@ class TriPlaneGenerator(torch.nn.Module):
         verts = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
         verts = torch.tensor(verts, dtype=torch.float, device='cuda')
         self.register_buffer('verts', verts)
-        self.face_model = GaussianModel(self.sh_degree, verts)
+        # self.face_model = GaussianModel(self.sh_degree, verts)
 
     def depth_of_object(self):
         # Transform object coordinates to camera coordinates
         object_coords_homogeneous = torch.cat((self.verts, torch.ones((self.verts.shape[0], 1), dtype=torch.float32, device='cuda')), dim=1)
 
         # # Apply perspective projection
-        projected_coords = torch.matmul(object_coords_homogeneous, self.viewpoint_camera.full_proj_transform)
+        object_coords_camera = torch.matmul(object_coords_homogeneous, self.viewpoint_camera2.full_proj_transform)
+        
+        # Apply perspective division
+        projected_coords = object_coords_camera[:, :2] / object_coords_camera[:, 2:]
 
         # Normalize points to image coordinates
-        projected_coords[:,:2] = (projected_coords[:,:2] + 1) * torch.tensor([self.viewpoint_camera.image_width, self.viewpoint_camera.image_height], device='cuda')[None, :] / 2
+        projected_coords = (projected_coords + 1) * torch.tensor([self.viewpoint_camera2.image_width, self.viewpoint_camera2.image_height], device='cuda')[None, :] / 2
         
         # Initialize depth image with maximum depth value
-        depth_image = torch.full((self.viewpoint_camera.image_height, self.viewpoint_camera.image_width), self.z_near, dtype=torch.float32, device='cuda')
+        depth_image = torch.full((self.viewpoint_camera2.image_height, self.viewpoint_camera2.image_width), self.z_far, dtype=torch.float32, device='cuda')
         # Calculate depth for each projected point and update depth image
         for i in range(self.verts.shape[0]):
             u, v = projected_coords[i, :2].round().int()
-            if 0 <= u < self.viewpoint_camera.image_width and 0 <= v < self.viewpoint_camera.image_height:
+            if 0 <= u < self.viewpoint_camera2.image_width and 0 <= v < self.viewpoint_camera2.image_height:
                 # depth = (2 * self.z_far * self.z_near) / (self.z_far + self.z_near - projected_coords[i, 2] * (self.z_far - self.z_near))
-                depth_image[v, u] = min(projected_coords[i, 2], depth_image[v, u])
-        return depth_image
+                depth_image[v, u] = min(object_coords_camera[i, 2], depth_image[v, u])
+        self.depth_image = depth_image.reshape(-1, 1)
 
     def mapping(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
         if self.rendering_kwargs['c_gen_conditioning_zero']:
@@ -270,26 +287,26 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image_batch = []
             alpha_image_batch = [] # mask
 
-            c2w_gen = torch.eye(4)[None].repeat(feature_gen_batch.shape[0],1,1).to(feature_gen_batch.device)
-            c2w_gen[:,1:3] *= -1 # lookat: neg z
-            c2w_gen[:,2,3] = 2.69 # z position
-            intrinsics_gen = torch.tensor([[[3.0000, 0.0000, 0.5000],
-                                            [0.0000, 3.0000, 0.5000],
-                                            [0.0000, 0.0000, 1.0000]]]).repeat(feature_gen_batch.shape[0],1,1).to(feature_gen_batch.device)
+            # c2w_gen = torch.eye(4)[None].repeat(feature_gen_batch.shape[0],1,1).to(feature_gen_batch.device)
+            # c2w_gen[:,1:3] *= -1 # lookat: neg z
+            # c2w_gen[:,2,3] = 2.69 # z position
+            # intrinsics_gen = torch.tensor([[[3.0000, 0.0000, 0.5000],
+            #                                 [0.0000, 3.0000, 0.5000],
+            #                                 [0.0000, 0.0000, 1.0000]]]).repeat(feature_gen_batch.shape[0],1,1).to(feature_gen_batch.device)
 
-            ray_origins, ray_directions = self.ray_sampler(c2w_gen, intrinsics_gen, self.plane_resolution)
+            # ray_origins, ray_directions = self.ray_sampler(c2w_gen, intrinsics_gen, self.plane_resolution)
             
-            self.viewpoint_camera2.update_transforms2(intrinsics_gen[0], c2w_gen[0])
-            with torch.no_grad(): # NOTE: do not update head template
-                # FIXME: this may not be the best way to get depth, because the edge is not clean 
-                depth_image = gs_render(self.viewpoint_camera2, self.face_model, None, self.background)["depth"] # [1, H, W]
-                depth_image = depth_image.permute(1,2,0).reshape(-1, 1).contiguous()
-                # depth_image = self.depth_of_object()
-                # depth_image = depth_image.reshape(-1, 1)
+            # self.viewpoint_camera2.update_transforms2(intrinsics_gen[0], c2w_gen[0])
+            # with torch.no_grad(): # NOTE: do not update head template
+            #     # FIXME: this may not be the best way to get depth, because the edge is not clean 
+            #     # depth_image = gs_render(self.viewpoint_camera2, self.face_model, None, self.background)["depth"] # [1, H, W]
+            #     # depth_image = depth_image.permute(1,2,0).reshape(-1, 1).contiguous()
+            #     depth_image = self.depth_of_object()
+            #     depth_image = depth_image.reshape(-1, 1)
             
             # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
             
-            for _cam2world_matrix, _intrinsics, feature_gen, _ray_origins, _ray_directions in zip(cam2world_matrix, intrinsics, feature_gen_batch, ray_origins, ray_directions):
+            for _cam2world_matrix, _intrinsics, feature_gen in zip(cam2world_matrix, intrinsics, feature_gen_batch):
                 self.viewpoint_camera.update_transforms2(_intrinsics, _cam2world_matrix)
 
                 ## TODO: can gaussiam splatting run batch in parallel?
@@ -306,12 +323,13 @@ class TriPlaneGenerator(torch.nn.Module):
                 #     # depth_image = depth_image.reshape(-1, 1)
 
                 start_dim = 0
-                _depth = feature_gen[:,start_dim:start_dim+1] 
+                # _depth = feature_gen[:,start_dim:start_dim+1] 
                 _depth = torch.where(
-                    depth_image > self.depth_cutoff,
-                    depth_image, # if true 
+                    self.depth_image < self.z_far,
+                    self.depth_image, # if true 
                     feature_gen[:,start_dim:start_dim+1]) # if false
-                self.gaussian.update_xyz(_depth, _ray_origins, _ray_directions)
+                self.gaussian.update_xyz(_depth, self.ray_origins, self.ray_directions)
+                # st()
                 start_dim += 1
 
                 if self.text_decoder.options['gen_rgb']:
