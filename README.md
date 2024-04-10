@@ -1,6 +1,6 @@
 ## Efficient Generation of Gaussian Splatting using Adversarial Networks (EGGS)<br>
 
-
+[**Porgress Report Slides**](https://docs.google.com/presentation/d/1JGgae3PIRuA5FQMhrDwPaO-82CbwF1G4gg_khUtB1sA/edit?usp=sharing)
 
 
 Abstract: *Unsupervised generation of high-quality multi-view-consistent images and 3D shapes using only collections of single-view 2D photographs has been a long-standing challenge. Existing 3D GANs are either compute-intensive or make approximations that are not 3D-consistent; the former limits quality and resolution of the generated images and the latter adversely affects multi-view consistency and shape quality. In this work, we further improve the training speed of generative model using 3DGS, which saves time in volume rendering and can render the image very fast. In addition, our method is refrain from the resolution constraints inherent in the volume rendering method, and can render arbitrarily high resolution images without superresolution module.*
