@@ -286,6 +286,7 @@ class TriPlaneGenerator(torch.nn.Module):
             feature_gen_batch = feature_image.permute(0,2,3,1).reshape(B, H*W, K).contiguous()
             rgb_image_batch = []
             alpha_image_batch = [] # mask
+            depth_image_batch = []
 
             # c2w_gen = torch.eye(4)[None].repeat(feature_gen_batch.shape[0],1,1).to(feature_gen_batch.device)
             # c2w_gen[:,1:3] *= -1 # lookat: neg z
@@ -365,14 +366,17 @@ class TriPlaneGenerator(torch.nn.Module):
                 res = gs_render(self.viewpoint_camera, self.gaussian, None, self.background)
                 _rgb_image = res["render"]
                 _alpha_image = res["alpha"]
+                _depth_image = res["depth"]
                 ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
                 
                 rgb_image_batch.append(_rgb_image[None])
                 alpha_image_batch.append(_alpha_image[None])
+                depth_image_batch.append(_depth_image[None])
 
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
+            depth_image = torch.cat(depth_image_batch)
             ## FIXME: try different normalization method to normalize rgb image to [-1,1]
             rgb_image = (rgb_image - 0.5) * 2
 
@@ -394,7 +398,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
             ### ----- gaussian splatting [END] -----
 
-        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image}
+        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image}
     
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):

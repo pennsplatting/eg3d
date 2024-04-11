@@ -107,9 +107,9 @@ def launch_training(c, desc, outdir, dry_run):
 
 #----------------------------------------------------------------------------
 
-def init_dataset_kwargs(data):
+def init_dataset_kwargs(data, resolution):
     try:
-        dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False)
+        dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, resolution=resolution, use_labels=True, max_size=None, xflip=False)
         dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs) # Subclass of training.dataset.Dataset.
         dataset_kwargs.resolution = dataset_obj.resolution # Be explicit about resolution.
         dataset_kwargs.use_labels = dataset_obj.has_labels # Be explicit about labels.
@@ -170,7 +170,7 @@ def parse_comma_separated_list(s):
 @click.option('-n','--dry-run', help='Print training options and exit',                         is_flag=True)
 
 @click.option('--plane_resolution', help='Resolution of feature plane', metavar='BOOL', type=click.IntRange(min=1), default=128, required=False)
-
+@click.option('--render_resolution', help='Resolution of rendered images', metavar='BOOL', type=click.IntRange(min=1), default=128, required=False)
 # @click.option('--sr_module',    help='Superresolution module', metavar='STR',  type=str, required=True)
 @click.option('--neural_rendering_resolution_initial', help='Resolution to render at', metavar='INT',  type=click.IntRange(min=1), default=64, required=False)
 @click.option('--neural_rendering_resolution_final', help='Final resolution to render at, if blending', metavar='INT',  type=click.IntRange(min=1), required=False, default=None)
@@ -188,7 +188,7 @@ def parse_comma_separated_list(s):
 @click.option('--gs_min_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-7, required=False, show_default=True)
 @click.option('--gs_scale_bias',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-5, required=False, show_default=True)
 @click.option('--gs_scale_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
-@click.option('--gs_depth_bias',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=2, required=False, show_default=True)
+@click.option('--gs_depth_bias',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=2.8, required=False, show_default=True)
 @click.option('--gs_depth_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
 
 
@@ -248,7 +248,7 @@ def main(**kwargs):
     c.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, prefetch_factor=2)
 
     # Training set.
-    c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data)
+    c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data, resolution=opts.render_resolution)
     # if opts.cond and not c.training_set_kwargs.use_labels:
     #     raise click.ClickException('--cond=True requires labels specified in dataset.json')
     c.training_set_kwargs.use_labels = opts.cond

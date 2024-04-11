@@ -18,6 +18,7 @@ PIL.ImageFile.LOAD_TRUNCATED_IMAGES = True
 import json
 import torch
 import dnnlib
+import torch.nn.functional as F
 
 try:
     import pyspng
@@ -167,6 +168,7 @@ class ImageFolderDataset(Dataset):
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         self._path = path
+        self._resolution = resolution
         self._zipfile = None
 
         if os.path.isdir(self._path):
@@ -225,8 +227,12 @@ class ImageFolderDataset(Dataset):
                 image = np.array(PIL.Image.open(f))
         if image.ndim == 2:
             image = image[:, :, np.newaxis] # HW => HWC
+
         image = image.transpose(2, 0, 1) # HWC => CHW
-        return image
+        # image = image.reshape((res, 4, 
+        #                        res, 4, 3)).max(3).max(1)
+        image = F.interpolate(torch.tensor(image).unsqueeze(0), size=(self._resolution, self._resolution), mode='bilinear', align_corners=False).squeeze()
+        return image.numpy()
 
     def _load_raw_labels(self):
         fname = 'dataset.json'
