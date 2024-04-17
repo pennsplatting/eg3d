@@ -467,7 +467,6 @@ class TextureDecoder(torch.nn.Module):
         self.depth_factor = options['depth_factor']
         self.scale_bias = options['scale_bias']
         self.scale_factor = options['scale_factor']
-        print(f"scale_bias: {self.scale_bias}, scale_factor:{self.scale_factor}")
 
         self.net = torch.nn.Sequential(
             FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
@@ -503,24 +502,25 @@ class TextureDecoder(torch.nn.Module):
         
         if self.options['gen_opacity']:
             
-            out['opacity'] = x[..., start_dim:start_dim+1] # should be no adjustment for sigmoid
+            out['opacity'] = torch.sigmoid(x[..., start_dim:start_dim+1]) # should be no adjustment for sigmoid
             # if self.fix_opacity is not None:
             #     out['opacity'] = self.fix_opacity * torch.ones_like(out['opacity'])
             start_dim += 1
         
         if self.options['gen_scaling']:
             out['scaling'] = self.scale_bias + self.scale_factor * x[..., start_dim:start_dim+3].reshape(-1,3).reshape(N, H, W, 3)
+            # out['scaling'] = torch.clamp(torch.exp(x[..., start_dim:start_dim+3].reshape(-1,3)), max=self.options['max_scaling']).reshape(N, H, W, 3)
             start_dim += 3
             
         if self.options['gen_rotation']:
-            out['rotation'] = x[..., start_dim:start_dim+4].reshape(-1,4).reshape(N, H, W, 4) # check consistency before/after normalize: passed. Use: x[2,2,3,7:11]/out['rotation'][2,:,2,3]
+            out['rotation'] = torch.nn.functional.normalize(x[..., start_dim:start_dim+4].reshape(-1,4).reshape(N, H, W, 4)) # check consistency before/after normalize: passed. Use: x[2,2,3,7:11]/out['rotation'][2,:,2,3]
             start_dim += 4
         
         if self.options['gen_xyz_offset']:
             # if self.xyz_offset_act == 'normalize':
-            out['xyz_offset'] = self.xyz_offset_scale * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]) # TODO: whether use this normalize? May constrain the offset not deviate too much
+            # out['xyz_offset'] = self.xyz_offset_scale * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]) # TODO: whether use this normalize? May constrain the offset not deviate too much
             # elif self.xyz_offset_act == 'clamp':
-            #     out['xyz_offset'] = torch.clamp(x[..., start_dim:start_dim+3], max = self.xyz_offset_scale, min = -self.xyz_offset_scale) # TODO: whether use this normalize? May constrain the offset not deviate too much
+            out['xyz_offset'] = torch.clamp(x[..., start_dim:start_dim+3], max = self.xyz_offset_scale, min = -self.xyz_offset_scale) # TODO: whether use this normalize? May constrain the offset not deviate too much
             start_dim += 3
 
 

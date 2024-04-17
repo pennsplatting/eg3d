@@ -152,14 +152,6 @@ class StyleGAN2Loss(Loss):
 
         real_img = {'image': real_img, 'image_raw': real_img_raw} # no loss is calculated based on depth 
 
-        weight = 0
-        
-        if cur_tick < 2:
-            weight = 1
-        elif cur_tick < 10:
-            weight *= 0.5
-        else:
-            weight = 0
             
         # Gmain: Maximize logits for generated images.
         if phase in ['Gmain', 'Gboth']:

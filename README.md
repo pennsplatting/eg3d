@@ -42,6 +42,13 @@ python gen_samples.py --outdir=out --trunc=0.7 --shapes=true --seeds=0-3 \
     --network=networks/network_snapshot.pkl
 ```
 
+```.bash
+# Generate multiview images using pre-trained model
+
+python gen_multiview.py --outdir=out --trunc=0.7 --seeds=0 \
+    --network=networks/network_snapshot.pkl
+```
+
 We visualize our .mrc shape files with [UCSF Chimerax](https://www.cgl.ucsf.edu/chimerax/).
 
 To visualize a shape in ChimeraX do the following:
