@@ -13,7 +13,7 @@
 import os
 import re
 from typing import List, Optional, Tuple, Union
-
+import json
 import click
 import dnnlib
 import numpy as np
@@ -152,22 +152,28 @@ def generate_images(
     os.makedirs(outdir, exist_ok=True)
 
     cam2world_pose = LookAtPoseSampler.sample(3.14/2, 3.14/2, torch.tensor([0, 0, 0.2], device=device), radius=2.7, device=device)
-    intrinsics = FOV_to_intrinsics(fov_deg, device=device)
+    intrinsics = FOV_to_intrinsics(fov_deg, device='cpu')
 
     # Generate images.
     angle_p = -0.2
     angle_list = [(angle_y, angle_p) for angle_y in np.arange(-.4, .4, 1.e-3)]
 
+    labels = []
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
 
-        # imgs = []
+        imgs = []
         # angle_p = -0.2
         for angle_idx, (angle_y, angle_p) in enumerate(angle_list):
-            cam_pivot = torch.tensor(G.rendering_kwargs.get('avg_camera_pivot', [0, 0, 0]), device=device)
+            cam_pivot = torch.tensor(G.rendering_kwargs.get('avg_camera_pivot', [0, 0, 0]), device='cpu')
             cam_radius = G.rendering_kwargs.get('avg_camera_radius', 2.7)
-            cam2world_pose = LookAtPoseSampler.sample(np.pi/2 + angle_y, np.pi/2 + angle_p, cam_pivot, radius=cam_radius, device=device)
+            cam2world_pose = LookAtPoseSampler.sample(np.pi/2 + angle_y, np.pi/2 + angle_p, cam_pivot, radius=cam_radius)
+            label = cam2world_pose.flatten().numpy()
+            label = np.append(label, intrinsics.flatten().numpy())
+            label = label.tolist()
+            idx_str = f'{angle_idx:08d}'
+            labels.append([f'{idx_str[:5]}/img{idx_str}.png', label])
             conditioning_cam2world_pose = LookAtPoseSampler.sample(np.pi/2, np.pi/2, cam_pivot, radius=cam_radius, device=device)
             camera_params = torch.cat([cam2world_pose.reshape(-1, 16), intrinsics.reshape(-1, 9)], 1)
             conditioning_params = torch.cat([conditioning_cam2world_pose.reshape(-1, 16), intrinsics.reshape(-1, 9)], 1)
@@ -181,7 +187,7 @@ def generate_images(
 
             img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8) # (1, 512, 512, 3)
             PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/seed{seed:04d}_{angle_idx:02d}.png')
-            # imgs.append(img)
+            imgs.append(img)
 
         # img = torch.cat(imgs, dim=2)
 
@@ -227,6 +233,17 @@ def generate_images(
         #         with mrcfile.new_mmap(os.path.join(outdir, f'seed{seed:04d}.mrc'), overwrite=True, shape=sigmas.shape, mrc_mode=2) as mrc:
         #             mrc.data[:] = sigmas
 
+    metadata = {
+        'labels': labels
+    }
+    
+    def save_bytes(fname: str, data: Union[bytes, str]):
+        os.makedirs(os.path.dirname(fname), exist_ok=True)
+        with open(fname, 'wb') as fout:
+            if isinstance(data, str):
+                data = data.encode('utf8')
+            fout.write(data)
+    save_bytes(os.path.join(outdir,'dataset.json'), json.dumps(metadata))
 
 #----------------------------------------------------------------------------
 

@@ -184,13 +184,14 @@ def parse_comma_separated_list(s):
 @click.option('--gs_gen_rotation', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=True)
 @click.option('--gs_gen_xyz_offset', help='Enable mask condition in the discriminator', metavar='BOOL',  type=bool, required=False, default=False)
 @click.option('--gs_xyz_offset_scale',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=6.e-06, required=False, show_default=True)
-@click.option('--gs_max_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-4, required=False, show_default=True)
-@click.option('--gs_min_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-7, required=False, show_default=True)
-@click.option('--gs_scale_bias',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1.e-05, required=False, show_default=True)
-@click.option('--gs_scale_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1.e-04, required=False, show_default=True)
+@click.option('--gs_max_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=float, default=-4, required=False, show_default=True)
+@click.option('--gs_min_scaling',    help='decoder learning rate multiplier.', metavar='FLOAT', type=float, default=-7, required=False, show_default=True)
+@click.option('--gs_scale_bias',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(max=0), default=-3.5, required=False, show_default=True)
+@click.option('--gs_scale_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=1, required=False, show_default=True)
 @click.option('--gs_depth_bias',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=2.8, required=False, show_default=True)
 @click.option('--gs_depth_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=0.5, required=False, show_default=True)
 
+@click.option('--depth_distill',    help='distill eg3d depth', metavar='BOOL', type=bool, required=False, default=False)
 
 @click.option('--blur_fade_kimg', help='Blur over how many', metavar='INT',  type=click.IntRange(min=1), required=False, default=200)
 @click.option('--gen_pose_cond', help='If true, enable generator pose conditioning.', metavar='BOOL',  type=bool, required=False, default=False)
@@ -384,6 +385,7 @@ def main(**kwargs):
     c.G_kwargs.sr_kwargs = dnnlib.EasyDict(channel_base=opts.cbase, channel_max=opts.cmax, fused_modconv_default='inference_only')
 
     c.loss_kwargs.style_mixing_prob = opts.style_mixing_prob
+    c.loss_kwargs.depth_distill = opts.depth_distill
 
     # Augmentation.
     if opts.aug != 'noaug':

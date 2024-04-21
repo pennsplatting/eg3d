@@ -17,6 +17,8 @@ from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import upfirdn2d
 from training.dual_discriminator import filtered_resizing
 
+import dnnlib
+import legacy
 from pdb import set_trace as st
 #----------------------------------------------------------------------------
 
@@ -27,11 +29,12 @@ class Loss:
 #----------------------------------------------------------------------------
 
 class StyleGAN2Loss(Loss):
-    def __init__(self, device, G, D, augment_pipe=None, r1_gamma=10, style_mixing_prob=0, pl_weight=0, pl_batch_shrink=2, pl_decay=0.01, pl_no_weight_grad=False, blur_init_sigma=0, blur_fade_kimg=0, r1_gamma_init=0, r1_gamma_fade_kimg=0, neural_rendering_resolution_initial=64, neural_rendering_resolution_final=None, neural_rendering_resolution_fade_kimg=0, gpc_reg_fade_kimg=1000, gpc_reg_prob=None, dual_discrimination=False, filter_mode='antialiased'):
+    def __init__(self, device, G, D, depth_distill=False, augment_pipe=None, r1_gamma=10, style_mixing_prob=0, pl_weight=0, pl_batch_shrink=2, pl_decay=0.01, pl_no_weight_grad=False, blur_init_sigma=0, blur_fade_kimg=0, r1_gamma_init=0, r1_gamma_fade_kimg=0, neural_rendering_resolution_initial=64, neural_rendering_resolution_final=None, neural_rendering_resolution_fade_kimg=0, gpc_reg_fade_kimg=1000, gpc_reg_prob=None, dual_discrimination=False, filter_mode='antialiased'):
         super().__init__()
         self.device             = device
         self.G                  = G
         self.D                  = D
+        self.depth_distill      = depth_distill
         self.augment_pipe       = augment_pipe
         self.r1_gamma           = r1_gamma
         self.style_mixing_prob  = style_mixing_prob
@@ -54,6 +57,11 @@ class StyleGAN2Loss(Loss):
         self.resample_filter = upfirdn2d.setup_filter([1,3,3,1], device=device)
         self.blur_raw_target = True
         assert self.gpc_reg_prob is None or (0 <= self.gpc_reg_prob <= 1)
+
+        if self.depth_distill:
+            network_pkl = "/home/zxy/eg3d/eg3d/data/eg3d_1/ffhq512-128.pkl"
+            with dnnlib.util.open_url(network_pkl) as f:
+                self.guide_G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
 
     def run_G(self, z, c, swapping_prob, neural_rendering_resolution, update_emas=False):
         if swapping_prob is not None:
@@ -160,14 +168,17 @@ class StyleGAN2Loss(Loss):
                 gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
+                if self.depth_distill:
+                    guide_img = self.guide_G.synthesis(_gen_ws, gen_c)
+                    loss_guide = torch.nn.functional.mse_loss(gen_img["image_depth"], guide_img["depth"])
+                    training_stats.report('Loss/G/loss_guide', loss_guide)
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits)
-                # FIXME: weighted loss
-                # loss_Gmain = torch.nn.functional.softplus(-gen_logits) * weight
-                # l2_loss = torch.nn.functional.mse_loss(gen_img["image_real"], gen_img["image"])
                 training_stats.report('Loss/G/loss', loss_Gmain)
             with torch.autograd.profiler.record_function('Gmain_backward'):
-                loss_Gmain.mean().mul(gain).backward()
-                # (loss_Gmain + l2_loss).mean().mul(gain).backward()
+                if self.depth_distill:
+                    (loss_Gmain + loss_guide).mul(gain).backward()
+                else:
+                    loss_Gmain.mean().mul(gain).backward()
                 
             #     ## FIXME: debug grad
             #     print(f"Gradients for self.G -----begin---")
