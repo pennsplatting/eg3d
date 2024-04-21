@@ -379,10 +379,10 @@ def training_loop(
             # G_ema.gaussian_debug.save_ply("./gt_3dmm.ply")
             # G_ema.gaussian.save_ply(os.path.join(run_dir, f'fake{cur_nimg//1000:06d}.ply'))
             
-            np.savetxt(os.path.join(run_dir, f'xyz_offset{cur_tick}.txt'), G_ema.gaussian._xyz.cpu().detach().numpy(), fmt="%f", delimiter=" ")
-            np.savetxt(os.path.join(run_dir, f'gs_opacity{cur_tick}.txt'), G_ema.gaussian._opacity.cpu().detach().numpy(), fmt="%f", delimiter=" ")
-            np.savetxt(os.path.join(run_dir, f'gs_rotation{cur_tick}.txt'), G_ema.gaussian._rotation.cpu().detach().numpy(), fmt="%f", delimiter=" ")
-            np.savetxt(os.path.join(run_dir, f'gs_scaling{cur_tick}.txt'), G_ema.gaussian._scaling.cpu().detach().numpy(), fmt="%f", delimiter=" ")
+            np.savetxt(os.path.join(run_dir, f'xyz_offset{cur_tick}.txt'), G_ema.gaussian.get_xyz.cpu().detach().numpy(), fmt="%f", delimiter=" ")
+            np.savetxt(os.path.join(run_dir, f'gs_opacity{cur_tick}.txt'), G_ema.gaussian.get_opacity.cpu().detach().numpy(), fmt="%f", delimiter=" ")
+            np.savetxt(os.path.join(run_dir, f'gs_rotation{cur_tick}.txt'), G_ema.gaussian.get_rotation.cpu().detach().numpy(), fmt="%f", delimiter=" ")
+            np.savetxt(os.path.join(run_dir, f'gs_scaling{cur_tick}.txt'), G_ema.gaussian.get_scaling.cpu().detach().numpy(), fmt="%f", delimiter=" ")
             #--------------------
             # # Log forward-conditioned images
 

@@ -173,7 +173,10 @@ class TriPlaneGenerator(torch.nn.Module):
         self.ray_directions = self.ray_directions[0]
         
         self.viewpoint_camera2.update_transforms2(intrinsics_gen[0], c2w_gen[0])
-        self.depth_of_object()
+
+        self.depth_distill = True
+        if not self.depth_distill:
+            self.depth_of_object()
         
         # self.depth_cutoff = 2.4 # TODO: cut off head template depth, maybe 2.3-2.4
 
@@ -221,7 +224,6 @@ class TriPlaneGenerator(torch.nn.Module):
         return ws
             
     def synthesis(self, ws, c, neural_rendering_resolution=None, update_emas=False, cache_backbone=False, use_cached_backbone=False, **synthesis_kwargs):
-        # real_img = self.gt_uv_map(c)
         
         cam2world_matrix = c[:, :16].view(-1, 4, 4)
         intrinsics = c[:, 16:25].view(-1, 3, 3)
@@ -325,10 +327,13 @@ class TriPlaneGenerator(torch.nn.Module):
 
                 start_dim = 0
                 # _depth = feature_gen[:,start_dim:start_dim+1] 
-                _depth = torch.where(
-                    self.depth_image < self.z_far,
-                    self.depth_image, # if true 
-                    feature_gen[:,start_dim:start_dim+1]) # if false
+                if self.depth_distill:
+                    _depth = feature_gen[:,start_dim:start_dim+1]
+                else:
+                    _depth = torch.where(
+                        self.depth_image < self.z_far,
+                        self.depth_image, # if true 
+                        feature_gen[:,start_dim:start_dim+1]) # if false
                 self.gaussian.update_xyz(_depth, self.ray_origins, self.ray_directions)
                 # st()
                 start_dim += 1

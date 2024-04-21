@@ -77,7 +77,7 @@ class StyleGAN2Loss(Loss):
                 cutoff = torch.where(torch.rand([], device=ws.device) < self.style_mixing_prob, cutoff, torch.full_like(cutoff, ws.shape[1]))
                 ws[:, cutoff:] = self.G.mapping(torch.randn_like(z), c, update_emas=False)[:, cutoff:]
         gen_output = self.G.synthesis(ws, c, neural_rendering_resolution=neural_rendering_resolution, update_emas=update_emas)
-        return gen_output, ws
+        return gen_output, ws, c_gen_conditioning
 
     def run_D(self, img, c, blur_sigma=0, blur_sigma_raw=0, update_emas=False):
         blur_size = np.floor(blur_sigma * 3)
@@ -116,7 +116,7 @@ class StyleGAN2Loss(Loss):
             neural_rendering_resolution = self.neural_rendering_resolution_initial
             
         with torch.autograd.profiler.record_function('Gmain_forward'):
-            gen_img, _gen_ws = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
+            gen_img, _gen_ws, _ = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
             loss = torch.nn.functional.mse_loss(gen_img["image_real"], gen_img["image"])
         with torch.autograd.profiler.record_function('Gmain_backward'):
             loss.backward()
@@ -164,19 +164,22 @@ class StyleGAN2Loss(Loss):
         # Gmain: Maximize logits for generated images.
         if phase in ['Gmain', 'Gboth']:
             with torch.autograd.profiler.record_function('Gmain_forward'):
-                gen_img, _gen_ws = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
+                gen_img, _gen_ws, _gen_conditioning_params = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
                 gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
                 if self.depth_distill:
-                    guide_img = self.guide_G.synthesis(_gen_ws, gen_c)
-                    loss_guide = torch.nn.functional.mse_loss(gen_img["image_depth"], guide_img["depth"])
+                    ws = self.guide_G.mapping(gen_z, _gen_conditioning_params)
+                    guide_img = self.guide_G.synthesis(ws, gen_c)
+                    # print(guide_img["image_depth"].shape, gen_img["image_depth"].shape)
+                    # exit(0)
+                    loss_guide = torch.nn.functional.mse_loss(gen_img["image_depth"], guide_img["image_depth"])
                     training_stats.report('Loss/G/loss_guide', loss_guide)
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits)
                 training_stats.report('Loss/G/loss', loss_Gmain)
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 if self.depth_distill:
-                    (loss_Gmain + loss_guide).mul(gain).backward()
+                    (loss_Gmain + loss_guide).mean().mul(gain).backward()
                 else:
                     loss_Gmain.mean().mul(gain).backward()
                 
@@ -310,7 +313,7 @@ class StyleGAN2Loss(Loss):
         loss_Dgen = 0
         if phase in ['Dmain', 'Dboth']:
             with torch.autograd.profiler.record_function('Dgen_forward'):
-                gen_img, _gen_ws = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution, update_emas=True)
+                gen_img, _gen_ws, _ = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution, update_emas=True)
                 gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma, update_emas=True)
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
