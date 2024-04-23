@@ -59,7 +59,8 @@ class StyleGAN2Loss(Loss):
         assert self.gpc_reg_prob is None or (0 <= self.gpc_reg_prob <= 1)
 
         if self.depth_distill:
-            network_pkl = "/home/zxy/eg3d/eg3d/data/eg3d_1/ffhq512-128.pkl"
+            # network_pkl = "/home/zxy/eg3d/eg3d/data/eg3d_1/ffhq512-128.pkl"
+            network_pkl = "/root/zxy/data/ffhq512-128.pkl"
             with dnnlib.util.open_url(network_pkl) as f:
                 self.guide_G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
 
@@ -168,20 +169,21 @@ class StyleGAN2Loss(Loss):
                 gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
-                if self.depth_distill:
-                    ws = self.guide_G.mapping(gen_z, _gen_conditioning_params)
-                    guide_img = self.guide_G.synthesis(ws, gen_c)
-                    # print(guide_img["image_depth"].shape, gen_img["image_depth"].shape)
-                    # exit(0)
-                    loss_guide = torch.nn.functional.mse_loss(gen_img["image_depth"], guide_img["image_depth"])
-                    training_stats.report('Loss/G/loss_guide', loss_guide)
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits)
                 training_stats.report('Loss/G/loss', loss_Gmain)
+
             with torch.autograd.profiler.record_function('Gmain_backward'):
-                if self.depth_distill:
-                    (loss_Gmain + loss_guide).mean().mul(gain).backward()
-                else:
-                    loss_Gmain.mean().mul(gain).backward()
+                loss_Gmain.mean().mul(gain).backward()
+
+            if self.depth_distill:
+                gen_img, _gen_ws, c_gen_conditioning = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
+                ws = self.guide_G.mapping(gen_z, c_gen_conditioning, update_emas=False)
+                guide_img = self.guide_G.synthesis(ws, gen_c)
+                # print(guide_img["image_depth"].max(), guide_img["image_depth"].min(), gen_img["image_depth"].max(), gen_img["image_depth"].min())
+                # exit(0)
+                loss_guide = torch.nn.functional.l1_loss(gen_img["image_depth"], guide_img["image_depth"])
+                training_stats.report('Loss/G/loss_guide', loss_guide)
+                loss_guide.mul(gain).backward()
                 
             #     ## FIXME: debug grad
             #     print(f"Gradients for self.G -----begin---")

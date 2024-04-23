@@ -152,25 +152,25 @@ def generate_images(
     os.makedirs(outdir, exist_ok=True)
 
     cam2world_pose = LookAtPoseSampler.sample(3.14/2, 3.14/2, torch.tensor([0, 0, 0.2], device=device), radius=2.7, device=device)
-    intrinsics = FOV_to_intrinsics(fov_deg, device='cpu')
+    intrinsics = FOV_to_intrinsics(fov_deg, device=device)
 
     # Generate images.
     angle_p = -0.2
-    angle_list = [(angle_y, angle_p) for angle_y in np.arange(-.4, .4, 1.e-3)]
+    angle_list = [(angle_y, angle_p) for angle_y in np.arange(-.4, .4, 1.e-2)]
 
     labels = []
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
 
-        imgs = []
+        # imgs = []
         # angle_p = -0.2
         for angle_idx, (angle_y, angle_p) in enumerate(angle_list):
-            cam_pivot = torch.tensor(G.rendering_kwargs.get('avg_camera_pivot', [0, 0, 0]), device='cpu')
+            cam_pivot = torch.tensor(G.rendering_kwargs.get('avg_camera_pivot', [0, 0, 0]), device=device)
             cam_radius = G.rendering_kwargs.get('avg_camera_radius', 2.7)
-            cam2world_pose = LookAtPoseSampler.sample(np.pi/2 + angle_y, np.pi/2 + angle_p, cam_pivot, radius=cam_radius)
-            label = cam2world_pose.flatten().numpy()
-            label = np.append(label, intrinsics.flatten().numpy())
+            cam2world_pose = LookAtPoseSampler.sample(np.pi/2 + angle_y, np.pi/2 + angle_p, cam_pivot, radius=cam_radius, device=device)
+            label = cam2world_pose.cpu().detach().numpy().flatten()
+            label = np.append(label, intrinsics.cpu().detach().numpy().flatten())
             label = label.tolist()
             idx_str = f'{angle_idx:08d}'
             labels.append([f'{idx_str[:5]}/img{idx_str}.png', label])
@@ -187,7 +187,7 @@ def generate_images(
 
             img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8) # (1, 512, 512, 3)
             PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/seed{seed:04d}_{angle_idx:02d}.png')
-            imgs.append(img)
+            # imgs.append(img)
 
         # img = torch.cat(imgs, dim=2)
 

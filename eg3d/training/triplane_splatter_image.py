@@ -174,7 +174,7 @@ class TriPlaneGenerator(torch.nn.Module):
         
         self.viewpoint_camera2.update_transforms2(intrinsics_gen[0], c2w_gen[0])
 
-        self.depth_distill = True
+        self.depth_distill = False
         if not self.depth_distill:
             self.depth_of_object()
         
@@ -185,8 +185,8 @@ class TriPlaneGenerator(torch.nn.Module):
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
     def load_face_model(self):
-        # obj_path = '/root/zxy/data/head_template_5023_align.obj'
-        obj_path = '/home/zxy/eg3d/eg3d/data/head_template_5023_align.obj'
+        obj_path = '/root/zxy/data/head_template_5023_align.obj'
+        # obj_path = '/home/zxy/eg3d/eg3d/data/head_template_5023_align.obj'
         verts, _, _, _  = load_obj(obj_path)
         ### normalize to eg3d
         verts = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
@@ -510,7 +510,7 @@ class TextureDecoder(torch.nn.Module):
             start_dim += 1
         
         if self.options['gen_scaling']:
-            out['scaling'] = self.scale_bias + self.scale_factor * x[..., start_dim:start_dim+3].reshape(N, H, W, 3)
+            out['scaling'] = self.scale_bias + self.scale_factor * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]).reshape(N, H, W, 3)
             # out['scaling'] = torch.clamp(torch.exp(x[..., start_dim:start_dim+3].reshape(-1,3)), max=self.options['max_scaling']).reshape(N, H, W, 3)
             start_dim += 3
             
