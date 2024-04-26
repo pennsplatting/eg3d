@@ -174,7 +174,7 @@ class TriPlaneGenerator(torch.nn.Module):
         
         self.viewpoint_camera2.update_transforms2(intrinsics_gen[0], c2w_gen[0])
 
-        self.depth_distill = False
+        self.depth_distill = True
         if not self.depth_distill:
             self.depth_of_object()
         

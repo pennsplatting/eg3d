@@ -180,8 +180,9 @@ class StyleGAN2Loss(Loss):
                 ws = self.guide_G.mapping(gen_z, c_gen_conditioning, update_emas=False)
                 guide_img = self.guide_G.synthesis(ws, gen_c)
                 # print(guide_img["image_depth"].max(), guide_img["image_depth"].min(), gen_img["image_depth"].max(), gen_img["image_depth"].min())
+                # print(gen_img["image_depth"].shape, guide_img["image_depth"].shape,gen_img["image"].shape, guide_img["image"][:,:,::4, ::4].shape)
                 # exit(0)
-                loss_guide = torch.nn.functional.l1_loss(gen_img["image_depth"], guide_img["image_depth"])
+                loss_guide = torch.nn.functional.l1_loss(gen_img["image_depth"], guide_img["image_depth"]) # + torch.nn.functional.l1_loss(gen_img["image"], guide_img["image"][:,:,::4, ::4])
                 training_stats.report('Loss/G/loss_guide', loss_guide)
                 loss_guide.mul(gain).backward()
                 
