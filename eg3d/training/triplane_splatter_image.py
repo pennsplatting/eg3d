@@ -28,6 +28,7 @@ import numpy as np
 
 from plyfile import PlyData
 import scipy.io as sio
+from torch_utils.extract_edge import EdgeExtractor
 
 # FIXME: replace with gt texture for debug
 # import sys
@@ -174,10 +175,12 @@ class TriPlaneGenerator(torch.nn.Module):
         
         self.viewpoint_camera2.update_transforms2(intrinsics_gen[0], c2w_gen[0])
 
-        self.depth_distill = True
+        self.depth_distill = False
         if not self.depth_distill:
             self.depth_of_object()
-        
+        self.edge_discriminate = True
+        if self.edge_discriminate:
+            self.edge_extractor = EdgeExtractor().cuda()
         # self.depth_cutoff = 2.4 # TODO: cut off head template depth, maybe 2.3-2.4
 
         white_background = True
@@ -185,8 +188,8 @@ class TriPlaneGenerator(torch.nn.Module):
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
     def load_face_model(self):
-        obj_path = '/root/zxy/data/head_template_5023_align.obj'
-        # obj_path = '/home/zxy/eg3d/eg3d/data/head_template_5023_align.obj'
+        # obj_path = '/root/zxy/data/head_template_5023_align.obj'
+        obj_path = '/home/zxy/eg3d/eg3d/data/head_template_5023_align.obj'
         verts, _, _, _  = load_obj(obj_path)
         ### normalize to eg3d
         verts = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
@@ -398,12 +401,13 @@ class TriPlaneGenerator(torch.nn.Module):
                 sr_image = rgb_image
                 rgb_image = rgb_image[:,:,::8, ::8] # TODO: FIXME change this downsample to a smoother gaussian filtering
             
-           
+            if self.edge_discriminate:
+                image_edge = self.edge_extractor(sr_image)
             ## TODO: render depth_image. May not explicitly calculated from the face model since its the same for all.
             # depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
             ### ----- gaussian splatting [END] -----
 
-        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image}
+        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge}
     
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
@@ -461,6 +465,78 @@ class OSGDecoder(torch.nn.Module):
 
 # decode features to SH
 class TextureDecoder(torch.nn.Module):
+    def __init__(self, n_features, options):
+        super().__init__()
+        self.hidden_dim = 64
+
+        self.options = options
+        self.out_dim = 1 + 3 * options['gen_rgb'] + 3 * options['gen_sh'] + 1 * options['gen_opacity'] + 3 * options['gen_scaling'] + 4 * options['gen_rotation'] + 3 * options['gen_xyz_offset']
+        self.xyz_offset_scale = options['xyz_offset_scale']
+        self.depth_bias = options['depth_bias']
+        self.depth_factor = options['depth_factor']
+        self.scale_bias = options['scale_bias']
+        self.scale_factor = options['scale_factor']
+
+        self.net = torch.nn.Sequential(
+            FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
+            torch.nn.Softplus(),
+            FullyConnectedLayer(self.hidden_dim, self.out_dim, lr_multiplier=options['decoder_lr_mul'])
+        )
+        
+    def forward(self, sampled_features):
+        # features (4, 96, 256, 256) -> (4, 16*3, 256, 256)
+        # Aggregate features
+        sampled_features = sampled_features.permute(0,2,3,1)
+        x = sampled_features
+
+        N, H, W, C = x.shape
+        x = x.reshape(N*H*W, C)
+        
+        x = self.net(x)
+        x = x.reshape(N, H, W, -1)
+
+        start_dim = 0
+        out = {}
+
+        out['depth'] = self.depth_bias + self.depth_factor * torch.nn.functional.normalize(x[..., start_dim:start_dim+1])
+        start_dim += 1
+
+        if self.options['gen_rgb']:
+            out['rgb'] = torch.sigmoid(x[..., start_dim:start_dim+3])*(1 + 2*0.001) - 0.001
+            start_dim += 3
+        
+        if self.options['gen_sh']:
+            out['sh'] = x[..., start_dim:start_dim+3]
+            start_dim += 3
+        
+        if self.options['gen_opacity']:
+            out['opacity'] = x[..., start_dim:start_dim+1] # should be no adjustment for sigmoid
+            start_dim += 1
+        
+        if self.options['gen_scaling']:
+            out['scaling'] = self.scale_bias + self.scale_factor * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]).reshape(N, H, W, 3)
+            # out['scaling'] = torch.clamp(torch.exp(x[..., start_dim:start_dim+3].reshape(-1,3)), max=self.options['max_scaling']).reshape(N, H, W, 3)
+            start_dim += 3
+            
+        if self.options['gen_rotation']:
+            out['rotation'] = torch.nn.functional.normalize(x[..., start_dim:start_dim+4].reshape(-1,4).reshape(N, H, W, 4)) # check consistency before/after normalize: passed. Use: x[2,2,3,7:11]/out['rotation'][2,:,2,3]
+            start_dim += 4
+        
+        if self.options['gen_xyz_offset']:
+            out['xyz_offset'] = self.xyz_offset_scale * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]) # TODO: whether use this normalize? May constrain the offset not deviate too much
+            start_dim += 3
+
+
+        # x.permute(0, 3, 1, 2)
+        for key, v in out.items():
+            # print(f"{key}:{v.shape}")
+            out[key] = v.permute(0, 3, 1, 2)
+            # print(f"{key} reshape to -> :{out[key].shape}")
+
+        out_planes = torch.cat([v for key, v in out.items()] ,dim=1)
+        return out_planes
+    
+class SequentialTextureDecoder(torch.nn.Module):
     def __init__(self, n_features, options):
         super().__init__()
         self.hidden_dim = 64

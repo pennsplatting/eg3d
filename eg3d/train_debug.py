@@ -192,6 +192,7 @@ def parse_comma_separated_list(s):
 @click.option('--gs_depth_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=0.5, required=False, show_default=True)
 
 @click.option('--depth_distill',    help='distill eg3d depth', metavar='BOOL', type=bool, required=False, default=False)
+@click.option('--edge_discriminate',    help='discriminate edge', metavar='BOOL', type=bool, required=False, default=False)
 
 @click.option('--blur_fade_kimg', help='Blur over how many', metavar='INT',  type=click.IntRange(min=1), required=False, default=200)
 @click.option('--gen_pose_cond', help='If true, enable generator pose conditioning.', metavar='BOOL',  type=bool, required=False, default=False)
@@ -265,7 +266,9 @@ def main(**kwargs):
     c.G_kwargs.plane_resolution = opts.plane_resolution
     c.D_kwargs.block_kwargs.freeze_layers = opts.freezed
     c.D_kwargs.epilogue_kwargs.mbstd_group_size = opts.mbstd_group
+    c.D_kwargs.edge_discriminate = opts.edge_discriminate
     c.loss_kwargs.r1_gamma = opts.gamma
+    c.loss_kwargs.edge_discriminate = opts.edge_discriminate
     c.G_opt_kwargs.lr = (0.002 if opts.cfg == 'stylegan2' else 0.0025) if opts.glr is None else opts.glr
     c.D_opt_kwargs.lr = opts.dlr
     c.metrics = opts.metrics

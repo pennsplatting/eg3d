@@ -109,6 +109,7 @@ class DualDiscriminator(torch.nn.Module):
         c_dim,                          # Conditioning label (C) dimensionality.
         img_resolution,                 # Input resolution.
         img_channels,                   # Number of input color channels.
+        edge_discriminate   = False,
         architecture        = 'resnet', # Architecture: 'orig', 'skip', 'resnet'.
         channel_base        = 32768,    # Overall multiplier for the number of channels.
         channel_max         = 512,      # Maximum number of channels in any layer.
@@ -121,8 +122,12 @@ class DualDiscriminator(torch.nn.Module):
         epilogue_kwargs     = {},       # Arguments for DiscriminatorEpilogue.
     ):
         super().__init__()
-        img_channels *= 2
+        if edge_discriminate:
+            img_channels += 1
+        else:
+            img_channels *= 2
 
+        self.edge_discriminate = edge_discriminate
         self.c_dim = c_dim
         self.img_resolution = img_resolution
         self.img_resolution_log2 = int(np.log2(img_resolution))
@@ -154,8 +159,13 @@ class DualDiscriminator(torch.nn.Module):
         self.disc_c_noise = disc_c_noise
 
     def forward(self, img, c, update_emas=False, **block_kwargs):
-        image_raw = filtered_resizing(img['image_raw'], size=img['image'].shape[-1], f=self.resample_filter)
-        img = torch.cat([img['image'], image_raw], 1)
+        if self.edge_discriminate:
+            if 'image_edge' not in img.keys():
+                img['image_edge'] = img['image']
+            img = torch.cat([img['image'], img['image_edge']], 1)
+        else:
+            image_raw = filtered_resizing(img['image_raw'], size=img['image'].shape[-1], f=self.resample_filter)
+            img = torch.cat([img['image'], image_raw], 1)
 
         _ = update_emas # unused
         x = None

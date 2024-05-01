@@ -20,6 +20,7 @@ from training.dual_discriminator import filtered_resizing
 import dnnlib
 import legacy
 from pdb import set_trace as st
+from torch_utils.extract_edge import EdgeExtractor
 #----------------------------------------------------------------------------
 
 class Loss:
@@ -29,12 +30,13 @@ class Loss:
 #----------------------------------------------------------------------------
 
 class StyleGAN2Loss(Loss):
-    def __init__(self, device, G, D, depth_distill=False, augment_pipe=None, r1_gamma=10, style_mixing_prob=0, pl_weight=0, pl_batch_shrink=2, pl_decay=0.01, pl_no_weight_grad=False, blur_init_sigma=0, blur_fade_kimg=0, r1_gamma_init=0, r1_gamma_fade_kimg=0, neural_rendering_resolution_initial=64, neural_rendering_resolution_final=None, neural_rendering_resolution_fade_kimg=0, gpc_reg_fade_kimg=1000, gpc_reg_prob=None, dual_discrimination=False, filter_mode='antialiased'):
+    def __init__(self, device, G, D, edge_discriminate=False, depth_distill=False, augment_pipe=None, r1_gamma=10, style_mixing_prob=0, pl_weight=0, pl_batch_shrink=2, pl_decay=0.01, pl_no_weight_grad=False, blur_init_sigma=0, blur_fade_kimg=0, r1_gamma_init=0, r1_gamma_fade_kimg=0, neural_rendering_resolution_initial=64, neural_rendering_resolution_final=None, neural_rendering_resolution_fade_kimg=0, gpc_reg_fade_kimg=1000, gpc_reg_prob=None, dual_discrimination=False, filter_mode='antialiased'):
         super().__init__()
         self.device             = device
         self.G                  = G
         self.D                  = D
         self.depth_distill      = depth_distill
+        self.edge_discriminate  = edge_discriminate
         self.augment_pipe       = augment_pipe
         self.r1_gamma           = r1_gamma
         self.style_mixing_prob  = style_mixing_prob
@@ -59,10 +61,12 @@ class StyleGAN2Loss(Loss):
         assert self.gpc_reg_prob is None or (0 <= self.gpc_reg_prob <= 1)
 
         if self.depth_distill:
-            # network_pkl = "/home/zxy/eg3d/eg3d/data/eg3d_1/ffhq512-128.pkl"
-            network_pkl = "/root/zxy/data/ffhq512-128.pkl"
+            network_pkl = "/home/zxy/eg3d/eg3d/data/eg3d_1/ffhq512-128.pkl"
+            # network_pkl = "/root/zxy/data/ffhq512-128.pkl"
             with dnnlib.util.open_url(network_pkl) as f:
                 self.guide_G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+        if self.edge_discriminate:
+            self.edge_extractor = EdgeExtractor().cuda()
 
     def run_G(self, z, c, swapping_prob, neural_rendering_resolution, update_emas=False):
         if swapping_prob is not None:
@@ -118,7 +122,7 @@ class StyleGAN2Loss(Loss):
             
         with torch.autograd.profiler.record_function('Gmain_forward'):
             gen_img, _gen_ws, _ = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
-            loss = torch.nn.functional.mse_loss(gen_img["image_real"], gen_img["image"])
+            loss = torch.nn.functional.mse_loss(real_img, gen_img["image"])
         with torch.autograd.profiler.record_function('Gmain_backward'):
             loss.backward()
             
@@ -151,6 +155,9 @@ class StyleGAN2Loss(Loss):
         else:
             neural_rendering_resolution = self.neural_rendering_resolution_initial
 
+        if self.edge_discriminate:
+            with torch.no_grad():
+                real_img_edge = self.edge_extractor(real_img)
         real_img_raw = filtered_resizing(real_img, size=neural_rendering_resolution, f=self.resample_filter, filter_mode=self.filter_mode)
 
         if self.blur_raw_target:
@@ -159,7 +166,7 @@ class StyleGAN2Loss(Loss):
                 f = torch.arange(-blur_size, blur_size + 1, device=real_img_raw.device).div(blur_sigma).square().neg().exp2()
                 real_img_raw = upfirdn2d.filter2d(real_img_raw, f / f.sum())
 
-        real_img = {'image': real_img, 'image_raw': real_img_raw} # no loss is calculated based on depth 
+        real_img = {'image': real_img, 'image_raw': real_img_raw, 'image_edge': real_img_edge} # no loss is calculated based on depth 
 
             
         # Gmain: Maximize logits for generated images.
@@ -331,7 +338,8 @@ class StyleGAN2Loss(Loss):
             with torch.autograd.profiler.record_function(name + '_forward'):
                 real_img_tmp_image = real_img['image'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
                 real_img_tmp_image_raw = real_img['image_raw'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
-                real_img_tmp = {'image': real_img_tmp_image, 'image_raw': real_img_tmp_image_raw}
+                real_img_tmp_image_edge = real_img['image_edge'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
+                real_img_tmp = {'image': real_img_tmp_image, 'image_raw': real_img_tmp_image_raw, 'image_edge': real_img_tmp_image_edge}
 
                 real_logits = self.run_D(real_img_tmp, real_c, blur_sigma=blur_sigma)
                 training_stats.report('Loss/scores/real', real_logits)
@@ -346,7 +354,7 @@ class StyleGAN2Loss(Loss):
                 if phase in ['Dreg', 'Dboth']:
                     if self.dual_discrimination:
                         with torch.autograd.profiler.record_function('r1_grads'), conv2d_gradfix.no_weight_gradients():
-                            r1_grads = torch.autograd.grad(outputs=[real_logits.sum()], inputs=[real_img_tmp['image'], real_img_tmp['image_raw']], create_graph=True, only_inputs=True)
+                            r1_grads = torch.autograd.grad(outputs=[real_logits.sum()], inputs=[real_img_tmp['image'], real_img_tmp['image_edge']], create_graph=True, only_inputs=True)
                             r1_grads_image = r1_grads[0]
                             r1_grads_image_raw = r1_grads[1]
                         r1_penalty = r1_grads_image.square().sum([1,2,3]) + r1_grads_image_raw.square().sum([1,2,3])

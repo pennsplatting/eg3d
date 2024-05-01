@@ -285,7 +285,7 @@ def training_loop(
             for real_img, real_c, gen_z, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c):
                 loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg, cur_tick=cur_tick)
                 # FIXME: for debug
-                # loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=real_img, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg) 
+                # loss.accumulate_gradients_debug(phase=phase.name, real_c=real_c, real_img=real_img, gen_z=gen_z, gen_c=real_c, gain=phase.interval, cur_nimg=cur_nimg) 
             phase.module.requires_grad_(False)
 
             # Update weights.
@@ -364,24 +364,27 @@ def training_loop(
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             out = [G_ema(z=z, c=c, noise_mode='const') for z, c in zip(grid_z, grid_c)]
             images = torch.cat([o['image'].cpu() for o in out]).detach().numpy()
-            images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
-            images_mask = -torch.cat([o['image_mask'].cpu() for o in out]).detach().numpy()
+            # images_raw = torch.cat([o['image_raw'].cpu() for o in out]).detach().numpy()
+            # images_mask = -torch.cat([o['image_mask'].cpu() for o in out]).detach().numpy()
             images_depth = torch.cat([o['image_depth'].cpu() for o in out]).detach().numpy()
             images_depth = (images_depth - np.min(images_depth)) / (np.max(images_depth) - np.min(images_depth))
+            images_edge = torch.cat([o['image_edge'].cpu() for o in out]).detach().numpy()
             # images_real = torch.cat([o['image_real'].cpu() for o in out]).detach().numpy() # FIXME: init with gt texture for debug
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
-            save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=[-1,1], grid_size=grid_size)
-            save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[images_mask.min(), images_mask.max()], grid_size=grid_size)
+            # save_image_grid(images_raw, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_raw.png'), drange=[-1,1], grid_size=grid_size)
+            # save_image_grid(images_mask, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_mask.png'), drange=[images_mask.min(), images_mask.max()], grid_size=grid_size)
             save_image_grid(images_depth, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_depth.png'), drange=[0,1], grid_size=grid_size)
+            save_image_grid(images_edge, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}_edge.png'), drange=[0,1], grid_size=grid_size)
+            
             # save_image_grid(images_real, os.path.join(run_dir, f'reals{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
             
             # FIXME: save ply and see if the texture is well optimized
             # G_ema.gaussian_debug.save_ply("./gt_3dmm.ply")
             # G_ema.gaussian.save_ply(os.path.join(run_dir, f'fake{cur_nimg//1000:06d}.ply'))
             
-            np.savetxt(os.path.join(run_dir, f'xyz_offset{cur_tick}.txt'), G_ema.gaussian.get_xyz.cpu().detach().numpy(), fmt="%f", delimiter=" ")
-            np.savetxt(os.path.join(run_dir, f'gs_opacity{cur_tick}.txt'), G_ema.gaussian.get_opacity.cpu().detach().numpy(), fmt="%f", delimiter=" ")
-            np.savetxt(os.path.join(run_dir, f'gs_rotation{cur_tick}.txt'), G_ema.gaussian.get_rotation.cpu().detach().numpy(), fmt="%f", delimiter=" ")
+            # np.savetxt(os.path.join(run_dir, f'xyz_offset{cur_tick}.txt'), G_ema.gaussian.get_xyz.cpu().detach().numpy(), fmt="%f", delimiter=" ")
+            # np.savetxt(os.path.join(run_dir, f'gs_opacity{cur_tick}.txt'), G_ema.gaussian.get_opacity.cpu().detach().numpy(), fmt="%f", delimiter=" ")
+            # np.savetxt(os.path.join(run_dir, f'gs_rotation{cur_tick}.txt'), G_ema.gaussian.get_rotation.cpu().detach().numpy(), fmt="%f", delimiter=" ")
             np.savetxt(os.path.join(run_dir, f'gs_scaling{cur_tick}.txt'), G_ema.gaussian.get_scaling.cpu().detach().numpy(), fmt="%f", delimiter=" ")
             #--------------------
             # # Log forward-conditioned images
