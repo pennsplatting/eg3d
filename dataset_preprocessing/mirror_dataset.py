@@ -56,7 +56,10 @@ if __name__ == '__main__':
                 continue
 
             image_path = os.path.join(args.source, filename)
-            img = Image.open(image_path)
+            try:
+                img = Image.open(image_path)
+            except:
+                continue
 
             if args.dest is not None: # skip saving originals if dest==source
                 os.makedirs(os.path.dirname(os.path.join(dest, filename)), exist_ok=True)
@@ -70,7 +73,8 @@ if __name__ == '__main__':
             flipped_filename = base + '_mirror' + ext
             dataset["labels"].append([flipped_filename, label])
             flipped_img.save(os.path.join(dest, flipped_filename), compress_level=COMPRESS_LEVEL)
-            
+        
+        print(dataset)
         with open(os.path.join(dest, 'dataset.json'), "w") as f:
             json.dump(dataset, f)
 

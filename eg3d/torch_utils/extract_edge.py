@@ -13,9 +13,5 @@ class EdgeExtractor(torch.nn.Module):
         self.conv.weight = nn.Parameter(self.w)
         self.transform = transforms.Grayscale(num_output_channels=1)
         
-        # self.net = torch.nn.Sequential(
-            
-        # )
-        
     def forward(self, img):
         return self.conv(self.transform(img))

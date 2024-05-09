@@ -192,7 +192,12 @@ def parse_comma_separated_list(s):
 @click.option('--gs_depth_factor',    help='decoder learning rate multiplier.', metavar='FLOAT', type=click.FloatRange(min=0), default=0.5, required=False, show_default=True)
 
 @click.option('--depth_distill',    help='distill eg3d depth', metavar='BOOL', type=bool, required=False, default=False)
-@click.option('--edge_discriminate',    help='discriminate edge', metavar='BOOL', type=bool, required=False, default=False)
+@click.option('--edge_discriminate',    help='discriminate edge', metavar='BOOL', type=bool, required=False, default=True)
+@click.option('--use_template',    help='discriminate edge', metavar='BOOL', type=bool, required=False, default=True)
+@click.option('--multi_splatter',    help='Use multiple splatter images', metavar='BOOL', type=bool, required=False, default=False)
+@click.option('--sphere_bg',    help='Use multiple splatter images', metavar='BOOL', type=bool, required=False, default=False)
+@click.option('--opacity_reg',    help='Opacity regularization strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=1.0, required=False, show_default=True)
+
 
 @click.option('--blur_fade_kimg', help='Blur over how many', metavar='INT',  type=click.IntRange(min=1), required=False, default=200)
 @click.option('--gen_pose_cond', help='If true, enable generator pose conditioning.', metavar='BOOL',  type=bool, required=False, default=False)
@@ -264,6 +269,10 @@ def main(**kwargs):
     c.G_kwargs.channel_max = c.D_kwargs.channel_max = opts.cmax
     c.G_kwargs.mapping_kwargs.num_layers = opts.map_depth
     c.G_kwargs.plane_resolution = opts.plane_resolution
+    c.G_kwargs.multi_splatter = opts.multi_splatter
+    c.G_kwargs.use_template = opts.use_template
+    c.G_kwargs.edge_discriminate = opts.edge_discriminate
+    c.G_kwargs.sphere_bg = opts.sphere_bg
     c.D_kwargs.block_kwargs.freeze_layers = opts.freezed
     c.D_kwargs.epilogue_kwargs.mbstd_group_size = opts.mbstd_group
     c.D_kwargs.edge_discriminate = opts.edge_discriminate
@@ -328,6 +337,7 @@ def main(**kwargs):
         'c_scale': opts.c_scale, # mutliplier for generator pose conditioning label
         'superresolution_noise_mode': opts.sr_noise_mode, # [random or none], whether to inject pixel noise into super-resolution layers
         'density_reg': opts.density_reg, # strength of density regularization
+        'opacity_reg': opts.opacity_reg,
         'density_reg_p_dist': opts.density_reg_p_dist, # distance at which to sample perturbed points for density regularization
         'reg_type': opts.reg_type, # for experimenting with variations on density regularization
         'decoder_lr_mul': opts.decoder_lr_mul, # learning rate multiplier for decoder
@@ -354,6 +364,7 @@ def main(**kwargs):
             'avg_camera_radius': 2.7,
             'avg_camera_pivot': [0, 0, -0.06],
         })
+        c.G_kwargs.use_template = False
     elif opts.cfg == 'shapenet':
         rendering_options.update({
             'depth_resolution': 64,

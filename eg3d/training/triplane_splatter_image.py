@@ -29,6 +29,8 @@ import numpy as np
 from plyfile import PlyData
 import scipy.io as sio
 from torch_utils.extract_edge import EdgeExtractor
+from camera_utils import LookAtPoseSampler, FOV_to_intrinsics
+from training.bg_utils import hemispherical_texture_map
 
 # FIXME: replace with gt texture for debug
 # import sys
@@ -105,6 +107,10 @@ class TriPlaneGenerator(torch.nn.Module):
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
         plane_resolution,
+        edge_discriminate   = True,
+        use_template        = True,
+        multi_splatter      = False,
+        sphere_bg           = False,
         sh_degree           = 0,    # Spherical harmonics degree.
         sr_num_fp16_res     = 0,
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
@@ -124,14 +130,15 @@ class TriPlaneGenerator(torch.nn.Module):
         # TODO: maybe synthesize uv texture directly with stylegan2 backbone (img_channels=3)
         # so that there's no need for decoder
         self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=plane_resolution, img_channels=96, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
-        
+        self.sphere_bg = sphere_bg
+        if sphere_bg:
+            self.backbone_bg = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=img_resolution, img_channels=3, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
         # self.decoder = OSGDecoder(32, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 32})
         # self.text_decoder = TextureDecoder(96, {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': (sh_degree + 1) ** 2 * 3})
         text_decoder_options = {'decoder_lr_mul': rendering_kwargs.get('decoder_lr_mul', 1), 'decoder_output_dim': 0}
         text_decoder_options.update(text_decoder_kwargs)
-        self.text_decoder = TextureDecoder(96, text_decoder_options)
 
-        self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=self.text_decoder.out_dim, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
+        # self.superresolution = dnnlib.util.construct_class_by_name(class_name=rendering_kwargs['superresolution_module'], channels=self.text_decoder.out_dim, img_resolution=img_resolution, sr_num_fp16_res=sr_num_fp16_res, sr_antialias=rendering_kwargs['sr_antialias'], **sr_kwargs)
         
         self.neural_rendering_resolution = 64
         self.plane_resolution = plane_resolution
@@ -141,6 +148,9 @@ class TriPlaneGenerator(torch.nn.Module):
                 
         self.gaussian_splatting_use_sr = False
         self.sh_degree = sh_degree
+        self.edge_discriminate = edge_discriminate
+        self.use_template = use_template
+        self.multi_splatter = multi_splatter
         # self.gaussian = None
         # self.viewpoint_camera = None
         
@@ -159,34 +169,59 @@ class TriPlaneGenerator(torch.nn.Module):
         self.gaussian = GaussianModel(self.sh_degree)
         
         ### -------- gaussian splatting render --------
-        self.load_face_model()
-        
+        if self.use_template:
+            self.load_face_model()
+        self.depth_image = None
         self.viewpoint_camera2 = MiniCam(plane_resolution, plane_resolution, self.z_near, self.z_far)
-        c2w_gen = torch.eye(4)[None].to('cuda')
-        c2w_gen[:,1:3] *= -1 # lookat: neg z
-        c2w_gen[:,2,3] = 2.69 # z position
-        intrinsics_gen = torch.tensor([[[2.5000, 0.0000, 0.5000],
-                                        [0.0000, 2.5000, 0.5000],
-                                        [0.0000, 0.0000, 1.0000]]]).to('cuda')
-
-        self.ray_origins, self.ray_directions = self.ray_sampler(c2w_gen, intrinsics_gen, self.plane_resolution)
-        self.ray_origins = self.ray_origins[0]
-        self.ray_directions = self.ray_directions[0]
         
-        self.viewpoint_camera2.update_transforms2(intrinsics_gen[0], c2w_gen[0])
+        if self.multi_splatter:
+            cam_pivot = torch.tensor(rendering_kwargs.get('avg_camera_pivot', [0, 0, 0]), device="cuda")
+            cam_radius = rendering_kwargs.get('avg_camera_radius', 2.7)
+            angle_y = -0.4
+            angle_p = -0.2
+            fov_deg = 18.837
+            c2w_gen_left = LookAtPoseSampler.sample(np.pi/2 - angle_y, np.pi/2 + angle_p, cam_pivot, radius=cam_radius, device="cuda")
+            c2w_gen_right = LookAtPoseSampler.sample(np.pi/2 + angle_y, np.pi/2 + angle_p, cam_pivot, radius=cam_radius, device="cuda")
+            intrinsics_gen = FOV_to_intrinsics(fov_deg, device="cuda")
+            ray_origins, ray_directions = self.ray_sampler(c2w_gen_left, intrinsics_gen[None], self.plane_resolution)
+            self.ray_origins = ray_origins
+            self.ray_directions = ray_directions
+            ray_origins, ray_directions = self.ray_sampler(c2w_gen_right, intrinsics_gen[None], self.plane_resolution)
+            self.ray_origins = torch.cat((self.ray_origins, ray_origins), dim=1).squeeze()
+            self.ray_directions = torch.cat((self.ray_directions, ray_directions), dim=1).squeeze()
+            # self.sphere_mapping()
+            self.viewpoint_camera2.update_transforms2(intrinsics_gen, c2w_gen_left[0])
+            self.depth_image = self.depth_of_object(self.viewpoint_camera2)
+            self.viewpoint_camera2.update_transforms2(intrinsics_gen, c2w_gen_right[0])
+            self.depth_image = torch.cat((self.depth_image, self.depth_of_object(self.viewpoint_camera2)), dim=0)
+            self.text_decoder = TextureDecoder2View(96, text_decoder_options)
+        else:
+            c2w_gen = torch.eye(4)[None].to('cuda') 
+            c2w_gen[:,1:3] *= -1 # lookat: neg z
+            c2w_gen[:,2,3] = 2.69 # z position
+            intrinsics_gen = torch.tensor([[[2.5000, 0.0000, 0.5000],
+                                            [0.0000, 2.5000, 0.5000],
+                                            [0.0000, 0.0000, 1.0000]]]).to('cuda')
+            ray_origins, ray_directions = self.ray_sampler(c2w_gen, intrinsics_gen, self.plane_resolution)
+            self.ray_origins = ray_origins[0]
+            self.ray_directions = ray_directions[0]
 
-        self.depth_distill = False
-        if not self.depth_distill:
-            self.depth_of_object()
-        self.edge_discriminate = True
+            self.viewpoint_camera2.update_transforms2(intrinsics_gen[0], c2w_gen[0])
+            if self.use_template:
+                self.depth_image = self.depth_of_object(self.viewpoint_camera2)
+            self.text_decoder = TextureDecoder(96, text_decoder_options)
+
         if self.edge_discriminate:
             self.edge_extractor = EdgeExtractor().cuda()
-        # self.depth_cutoff = 2.4 # TODO: cut off head template depth, maybe 2.3-2.4
 
         white_background = True
         bg_color = [1,1,1] if white_background else [0, 0, 0]
         self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-
+        
+    def sphere_mapping(self):
+        print(self.ray_directions.shape, f"self.ray_directions: {self.ray_directions}")
+        exit(0)
+        
     def load_face_model(self):
         # obj_path = '/root/zxy/data/head_template_5023_align.obj'
         obj_path = '/home/zxy/eg3d/eg3d/data/head_template_5023_align.obj'
@@ -197,28 +232,73 @@ class TriPlaneGenerator(torch.nn.Module):
         self.register_buffer('verts', verts)
         # self.face_model = GaussianModel(self.sh_degree, verts)
 
-    def depth_of_object(self):
+    def depth_of_object(self, camera : MiniCam):
         # Transform object coordinates to camera coordinates
         object_coords_homogeneous = torch.cat((self.verts, torch.ones((self.verts.shape[0], 1), dtype=torch.float32, device='cuda')), dim=1)
 
         # # Apply perspective projection
-        object_coords_camera = torch.matmul(object_coords_homogeneous, self.viewpoint_camera2.full_proj_transform)
+        object_coords_camera = torch.matmul(object_coords_homogeneous, camera.full_proj_transform)
         
         # Apply perspective division
         projected_coords = object_coords_camera[:, :2] / object_coords_camera[:, 2:]
 
         # Normalize points to image coordinates
-        projected_coords = (projected_coords + 1) * torch.tensor([self.viewpoint_camera2.image_width, self.viewpoint_camera2.image_height], device='cuda')[None, :] / 2
+        projected_coords = (projected_coords + 1) * torch.tensor([camera.image_width, camera.image_height], device='cuda')[None, :] / 2
         
         # Initialize depth image with maximum depth value
-        depth_image = torch.full((self.viewpoint_camera2.image_height, self.viewpoint_camera2.image_width), self.z_far, dtype=torch.float32, device='cuda')
+        depth_image = torch.full((camera.image_height, camera.image_width), self.z_far, dtype=torch.float32, device='cuda')
         # Calculate depth for each projected point and update depth image
         for i in range(self.verts.shape[0]):
             u, v = projected_coords[i, :2].round().int()
-            if 0 <= u < self.viewpoint_camera2.image_width and 0 <= v < self.viewpoint_camera2.image_height:
+            if 0 <= u < camera.image_width and 0 <= v < camera.image_height:
                 # depth = (2 * self.z_far * self.z_near) / (self.z_far + self.z_near - projected_coords[i, 2] * (self.z_far - self.z_near))
                 depth_image[v, u] = min(object_coords_camera[i, 2], depth_image[v, u])
-        self.depth_image = depth_image.reshape(-1, 1)
+        return depth_image.reshape(-1, 1)
+        
+    def update_gaussian(self, feature_gen): # use 1 splatter image at front view
+        start_dim = 0
+
+        if self.use_template:
+            _depth = torch.where(
+                self.depth_image < 3.0,
+                self.depth_image, # if true 
+                feature_gen[:,start_dim:start_dim+1]) # if false
+        else:
+            _depth = feature_gen[:,start_dim:start_dim+1]
+
+        self.gaussian.update_xyz(_depth, self.ray_origins, self.ray_directions)
+
+        start_dim += 1
+
+        if self.text_decoder.options['gen_rgb']:
+            _rgb = feature_gen[:,start_dim:start_dim+3]
+            start_dim += 3
+            self.gaussian.update_rgb_textures(_rgb)
+        
+        if self.text_decoder.options['gen_sh']:
+            _sh = feature_gen[:,start_dim:start_dim+3]
+            start_dim += 3
+            self.gaussian.update_sh_texture(_sh)
+        
+        if self.text_decoder.options['gen_opacity']:
+            _opacity = feature_gen[:,start_dim:start_dim+1] # should be no adjustment for sigmoid
+            start_dim += 1
+            self.gaussian.update_opacity(_opacity)
+        
+        if self.text_decoder.options['gen_scaling']:
+            _scaling = feature_gen[:,start_dim:start_dim+3]
+            self.gaussian.update_scaling(_scaling, max_s = self.text_decoder.options['max_scaling'], min_s = self.text_decoder.options['min_scaling'])
+            start_dim += 3
+            
+        if self.text_decoder.options['gen_rotation']:
+            _rotation = feature_gen[:,start_dim:start_dim+4]
+            self.gaussian.update_rotation(_rotation)
+            start_dim += 4
+        
+        if self.text_decoder.options['gen_xyz_offset']:
+            _xyz_offset = feature_gen[:,start_dim:start_dim+3]
+            self.gaussian.update_xyz_offset(_xyz_offset)
+            start_dim += 3
 
     def mapping(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
         if self.rendering_kwargs['c_gen_conditioning_zero']:
@@ -241,6 +321,9 @@ class TriPlaneGenerator(torch.nn.Module):
             planes = self._last_planes
         else:
             planes = self.backbone.synthesis(ws, update_emas=update_emas, **synthesis_kwargs)
+            if self.sphere_bg:
+                bg_plane = self.backbone_bg.synthesis(ws, update_emas=update_emas, **synthesis_kwargs)
+                bg_plane = torch.sigmoid(bg_plane)*(1 + 2*0.001) - 0.001
         if cache_backbone:
             self._last_planes = planes
 
@@ -287,8 +370,12 @@ class TriPlaneGenerator(torch.nn.Module):
             ### ----- gaussian splatting -----
 
             feature_image = self.text_decoder(planes)
-            B, K, H, W = feature_image.shape
-            feature_gen_batch = feature_image.permute(0,2,3,1).reshape(B, H*W, K).contiguous()
+            if self.multi_splatter:
+                feature_gen_batch = feature_image
+            else: 
+                B, K, H, W = feature_image.shape
+                feature_gen_batch = feature_image.permute(0,2,3,1).reshape(B, H*W, K).contiguous()
+            
             rgb_image_batch = []
             alpha_image_batch = [] # mask
             depth_image_batch = []
@@ -311,76 +398,52 @@ class TriPlaneGenerator(torch.nn.Module):
             #     depth_image = depth_image.reshape(-1, 1)
             
             # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
+            ray_origins, ray_directions = self.ray_sampler(cam2world_matrix, intrinsics, self.plane_resolution)
             
-            for _cam2world_matrix, _intrinsics, feature_gen in zip(cam2world_matrix, intrinsics, feature_gen_batch):
-                self.viewpoint_camera.update_transforms2(_intrinsics, _cam2world_matrix)
+            if self.sphere_bg:
+                bg_batch = []
+                for _cam2world_matrix, _intrinsics, feature_gen, bg_gen, ray_direction in zip(cam2world_matrix, intrinsics, feature_gen_batch, bg_plane, ray_directions):
+                    self.viewpoint_camera.update_transforms2(_intrinsics, _cam2world_matrix)
 
-                ## TODO: can gaussiam splatting run batch in parallel?
-                # textures = F.grid_sample(texture_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 48, 1, 5023)
-                # textures.requires_grad_(True) 
-                # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
-                
-                # TODO: project head template onto image plane, and replace depth accordingly
-                # with torch.no_grad(): # NOTE: do not update head template
-                #     # FIXME: this may not be the best way to get depth, because the edge is not clean 
-                #     depth_image = gs_render(self.viewpoint_camera, self.face_model, None, self.background)["depth"] # [1, H, W]
-                #     depth_image = depth_image.permute(1,2,0).reshape(-1, 1).contiguous()
-                #     # depth_image = self.depth_of_object()
-                #     # depth_image = depth_image.reshape(-1, 1)
+                    ## TODO: can gaussiam splatting run batch in parallel?
+                    # textures = F.grid_sample(texture_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 48, 1, 5023)
+                    # textures.requires_grad_(True) 
+                    # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
 
-                start_dim = 0
-                # _depth = feature_gen[:,start_dim:start_dim+1] 
-                if self.depth_distill:
-                    _depth = feature_gen[:,start_dim:start_dim+1]
-                else:
-                    _depth = torch.where(
-                        self.depth_image < self.z_far,
-                        self.depth_image, # if true 
-                        feature_gen[:,start_dim:start_dim+1]) # if false
-                self.gaussian.update_xyz(_depth, self.ray_origins, self.ray_directions)
-                # st()
-                start_dim += 1
-
-                if self.text_decoder.options['gen_rgb']:
-                    _rgb = feature_gen[:,start_dim:start_dim+3]
-                    start_dim += 3
-                    self.gaussian.update_rgb_textures(_rgb)
-                
-                if self.text_decoder.options['gen_sh']:
-                    _sh = feature_gen[:,start_dim:start_dim+3]
-                    start_dim += 3
-                    self.gaussian.update_sh_texture(_sh)
-                
-                if self.text_decoder.options['gen_opacity']:
-                    _opacity = feature_gen[:,start_dim:start_dim+1] # should be no adjustment for sigmoid
-                    start_dim += 1
-                    self.gaussian.update_opacity(_opacity)
-                
-                if self.text_decoder.options['gen_scaling']:
-                    _scaling = feature_gen[:,start_dim:start_dim+3]
-                    self.gaussian.update_scaling(_scaling, max_s = self.text_decoder.options['max_scaling'], min_s = self.text_decoder.options['min_scaling'])
-                    start_dim += 3
+                    self.update_gaussian(feature_gen)
+                                
+                    res = gs_render(self.viewpoint_camera, self.gaussian, None, self.background)
+                    _rgb_image = res["render"]
+                    _alpha_image = res["alpha"]
+                    _depth_image = res["depth"]
                     
-                if self.text_decoder.options['gen_rotation']:
-                    _rotation = feature_gen[:,start_dim:start_dim+4]
-                    self.gaussian.update_rotation(_rotation)
-                    start_dim += 4
-                
-                if self.text_decoder.options['gen_xyz_offset']:
-                    _xyz_offset = feature_gen[:,start_dim:start_dim+3]
-                    self.gaussian.update_xyz_offset(_xyz_offset)
-                    start_dim += 3
-                            
-                res = gs_render(self.viewpoint_camera, self.gaussian, None, self.background)
-                _rgb_image = res["render"]
-                _alpha_image = res["alpha"]
-                _depth_image = res["depth"]
-                ## FIXME: output from gs_render should have output rgb range in [0,1], but now have overflowed to [0,20+]
-                
-                rgb_image_batch.append(_rgb_image[None])
-                alpha_image_batch.append(_alpha_image[None])
-                depth_image_batch.append(_depth_image[None])
+                    _bg = hemispherical_texture_map(ray_direction, bg_gen)
+                    # print(_bg.max(), _bg.min())
+                    _rgb_image = _alpha_image * _rgb_image + (1-_alpha_image) * _bg
+                    
+                    bg_batch.append(bg_gen[None])
+                    rgb_image_batch.append(_rgb_image[None])
+                    alpha_image_batch.append(_alpha_image[None])
+                    depth_image_batch.append(_depth_image[None])
+            else:
+                for _cam2world_matrix, _intrinsics, feature_gen in zip(cam2world_matrix, intrinsics, feature_gen_batch):
+                    self.viewpoint_camera.update_transforms2(_intrinsics, _cam2world_matrix)
 
+                    ## TODO: can gaussiam splatting run batch in parallel?
+                    # textures = F.grid_sample(texture_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 48, 1, 5023)
+                    # textures.requires_grad_(True) 
+                    # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
+
+                    self.update_gaussian(feature_gen)
+                                
+                    res = gs_render(self.viewpoint_camera, self.gaussian, None, self.background)
+                    _rgb_image = res["render"]
+                    _alpha_image = res["alpha"]
+                    _depth_image = res["depth"]
+                    
+                    rgb_image_batch.append(_rgb_image[None])
+                    alpha_image_batch.append(_alpha_image[None])
+                    depth_image_batch.append(_depth_image[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
@@ -405,6 +468,9 @@ class TriPlaneGenerator(torch.nn.Module):
                 image_edge = self.edge_extractor(sr_image)
             ## TODO: render depth_image. May not explicitly calculated from the face model since its the same for all.
             # depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
+
+            if self.sphere_bg:
+                bg = torch.cat(bg_batch)
             ### ----- gaussian splatting [END] -----
 
         return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge}
@@ -463,7 +529,6 @@ class OSGDecoder(torch.nn.Module):
         sigma = x[..., 0:1]
         return {'rgb': rgb, 'sigma': sigma}
 
-# decode features to SH
 class TextureDecoder(torch.nn.Module):
     def __init__(self, n_features, options):
         super().__init__()
@@ -536,13 +601,13 @@ class TextureDecoder(torch.nn.Module):
         out_planes = torch.cat([v for key, v in out.items()] ,dim=1)
         return out_planes
     
-class SequentialTextureDecoder(torch.nn.Module):
+class TextureDecoder2View(torch.nn.Module):
     def __init__(self, n_features, options):
         super().__init__()
         self.hidden_dim = 64
 
         self.options = options
-        self.out_dim = 1 + 3 * options['gen_rgb'] + 3 * options['gen_sh'] + 1 * options['gen_opacity'] + 3 * options['gen_scaling'] + 4 * options['gen_rotation'] + 3 * options['gen_xyz_offset']
+        self.out_dim = (1 + 3 * options['gen_rgb'] + 3 * options['gen_sh'] + 1 * options['gen_opacity'] + 3 * options['gen_scaling'] + 4 * options['gen_rotation'] + 3 * options['gen_xyz_offset']) * 2
         self.xyz_offset_scale = options['xyz_offset_scale']
         self.depth_bias = options['depth_bias']
         self.depth_factor = options['depth_factor']
@@ -556,7 +621,6 @@ class SequentialTextureDecoder(torch.nn.Module):
         )
         
     def forward(self, sampled_features):
-        # features (4, 96, 256, 256) -> (4, 16*3, 256, 256)
         # Aggregate features
         sampled_features = sampled_features.permute(0,2,3,1)
         x = sampled_features
@@ -565,7 +629,12 @@ class SequentialTextureDecoder(torch.nn.Module):
         x = x.reshape(N*H*W, C)
         
         x = self.net(x)
-        x = x.reshape(N, H, W, -1)
+        x = x.reshape(N, H*W, -1)
+        x_left = x[...,:self.out_dim//2]
+        x_right = x[...,self.out_dim//2:]
+
+        x = torch.cat((x_left, x_right), dim=1) # [4, 128, 128, 30]
+
 
         start_dim = 0
         out = {}
@@ -586,12 +655,12 @@ class SequentialTextureDecoder(torch.nn.Module):
             start_dim += 1
         
         if self.options['gen_scaling']:
-            out['scaling'] = self.scale_bias + self.scale_factor * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]).reshape(N, H, W, 3)
+            out['scaling'] = self.scale_bias + self.scale_factor * torch.nn.functional.normalize(x[..., start_dim:start_dim+3])
             # out['scaling'] = torch.clamp(torch.exp(x[..., start_dim:start_dim+3].reshape(-1,3)), max=self.options['max_scaling']).reshape(N, H, W, 3)
             start_dim += 3
             
         if self.options['gen_rotation']:
-            out['rotation'] = torch.nn.functional.normalize(x[..., start_dim:start_dim+4].reshape(-1,4).reshape(N, H, W, 4)) # check consistency before/after normalize: passed. Use: x[2,2,3,7:11]/out['rotation'][2,:,2,3]
+            out['rotation'] = torch.nn.functional.normalize(x[..., start_dim:start_dim+4]) # check consistency before/after normalize: passed. Use: x[2,2,3,7:11]/out['rotation'][2,:,2,3]
             start_dim += 4
         
         if self.options['gen_xyz_offset']:
@@ -600,10 +669,10 @@ class SequentialTextureDecoder(torch.nn.Module):
 
 
         # x.permute(0, 3, 1, 2)
-        for key, v in out.items():
-            # print(f"{key}:{v.shape}")
-            out[key] = v.permute(0, 3, 1, 2)
-            # print(f"{key} reshape to -> :{out[key].shape}")
+        # for key, v in out.items():
+        #     # print(f"{key}:{v.shape}")
+        #     out[key] = v.permute(0, 3, 1, 2)
+        #     # print(f"{key} reshape to -> :{out[key].shape}")
 
-        out_planes = torch.cat([v for key, v in out.items()] ,dim=1)
+        out_planes = torch.cat([v for key, v in out.items()] ,dim=2)
         return out_planes

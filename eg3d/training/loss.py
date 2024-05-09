@@ -205,8 +205,13 @@ class StyleGAN2Loss(Loss):
             #     print(f"Gradients for self.G -----end---")
             # st()
                 
-
-
+        # if phase in ['Greg', 'Gboth'] and self.G.rendering_kwargs['reg_type'] == 'l1': # opacity reg
+        #     gen_img, _, _ = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
+        #     alpha_img = gen_img['image_mask']
+        #     alpha_loss = torch.nn.functional.l1_loss(alpha_img, torch.ones_like(alpha_img, device=alpha_img.device)) * self.G.rendering_kwargs['opacity_reg']
+        #     training_stats.report('Loss/G/loss_alpha', alpha_loss)
+        #     alpha_loss.mul(gain).backward()
+            
         # # Density Regularization
         # if phase in ['Greg', 'Gboth'] and self.G.rendering_kwargs.get('density_reg', 0) > 0 and self.G.rendering_kwargs['reg_type'] == 'l1':
         #     if swapping_prob is not None:
