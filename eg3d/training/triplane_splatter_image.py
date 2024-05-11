@@ -450,6 +450,7 @@ class TriPlaneGenerator(torch.nn.Module):
             depth_image = torch.cat(depth_image_batch)
             ## FIXME: try different normalization method to normalize rgb image to [-1,1]
             rgb_image = (rgb_image - 0.5) * 2
+            alpha_image = (alpha_image - 0.5) * 2
 
             # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")
             
@@ -471,10 +472,12 @@ class TriPlaneGenerator(torch.nn.Module):
 
             if self.sphere_bg:
                 bg = torch.cat(bg_batch)
+                bg = (bg - 0.5) * 2
             ### ----- gaussian splatting [END] -----
-
-        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge}
-    
+        if self.sphere_bg:
+            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge, 'image_bg': bg}
+        else:
+            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge}
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
         # Compute RGB features, density for arbitrary 3D coordinates. Mostly used for extracting shapes. 

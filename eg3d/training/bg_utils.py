@@ -51,6 +51,7 @@ def hemispherical_texture_map(direction, texture):
     tex_x = torch.tensor(u * texture_width, dtype=torch.float) % texture_width
     tex_y = torch.tensor((1 - v) * texture_height, dtype=torch.float) % texture_height
     coords = torch.cat((tex_x,tex_y),dim=-1).unsqueeze(dim=1)
+    print(coords)
 
     # Query the RGB value from the texture
     rgb_color = F.grid_sample(texture[None], coords[None], align_corners=False)
