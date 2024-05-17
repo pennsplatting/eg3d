@@ -323,7 +323,7 @@ class TriPlaneGenerator(torch.nn.Module):
             planes = self.backbone.synthesis(ws, update_emas=update_emas, **synthesis_kwargs)
             if self.sphere_bg:
                 bg_plane = self.backbone_bg.synthesis(ws, update_emas=update_emas, **synthesis_kwargs)
-                bg_plane = torch.sigmoid(bg_plane)*(1 + 2*0.001) - 0.001
+                bg_plane = torch.sigmoid(bg_plane)*(1 + 2*0.001) - 0.001 # [0, 1]
         if cache_backbone:
             self._last_planes = planes
 
@@ -421,7 +421,7 @@ class TriPlaneGenerator(torch.nn.Module):
                     # print(_bg.max(), _bg.min())
                     _rgb_image = _alpha_image * _rgb_image + (1-_alpha_image) * _bg
                     
-                    bg_batch.append(bg_gen[None])
+                    bg_batch.append(_bg[None])
                     rgb_image_batch.append(_rgb_image[None])
                     alpha_image_batch.append(_alpha_image[None])
                     depth_image_batch.append(_depth_image[None])

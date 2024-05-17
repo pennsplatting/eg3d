@@ -196,6 +196,7 @@ def parse_comma_separated_list(s):
 @click.option('--use_template',    help='discriminate edge', metavar='BOOL', type=bool, required=False, default=True)
 @click.option('--multi_splatter',    help='Use multiple splatter images', metavar='BOOL', type=bool, required=False, default=False)
 @click.option('--sphere_bg',    help='Use multiple splatter images', metavar='BOOL', type=bool, required=False, default=False)
+@click.option('--use_segmentation',    help='Use face segmentation', metavar='BOOL', type=bool, required=False, default=False)
 @click.option('--opacity_reg',    help='Opacity regularization strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=1.0, required=False, show_default=True)
 
 
@@ -276,8 +277,10 @@ def main(**kwargs):
     c.D_kwargs.block_kwargs.freeze_layers = opts.freezed
     c.D_kwargs.epilogue_kwargs.mbstd_group_size = opts.mbstd_group
     c.D_kwargs.edge_discriminate = opts.edge_discriminate
+    c.D_kwargs.use_segmentation = opts.use_segmentation
     c.loss_kwargs.r1_gamma = opts.gamma
     c.loss_kwargs.edge_discriminate = opts.edge_discriminate
+    c.loss_kwargs.use_segmentation = opts.use_segmentation
     c.G_opt_kwargs.lr = (0.002 if opts.cfg == 'stylegan2' else 0.0025) if opts.glr is None else opts.glr
     c.D_opt_kwargs.lr = opts.dlr
     c.metrics = opts.metrics

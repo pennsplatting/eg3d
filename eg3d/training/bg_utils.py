@@ -48,13 +48,19 @@ def hemispherical_texture_map(direction, texture):
     v = theta / math.pi
 
     # Map 2D texture coordinates to image pixel coordinates
-    tex_x = torch.tensor(u * texture_width, dtype=torch.float) % texture_width
-    tex_y = torch.tensor((1 - v) * texture_height, dtype=torch.float) % texture_height
+    tex_x = torch.tensor(u * texture_width, dtype=torch.float) % texture_width / texture_width
+    tex_y = torch.tensor((1 - v) * texture_height, dtype=torch.float) % texture_height / texture_height
     coords = torch.cat((tex_x,tex_y),dim=-1).unsqueeze(dim=1)
-    print(coords)
+    coords = (coords - 0.5) * 2
+    # print(coords)
 
     # Query the RGB value from the texture
-    rgb_color = F.grid_sample(texture[None], coords[None], align_corners=False)
+    # print(texture.shape, coords.shape)
+    # print(texture)
+
+    rgb_color = F.grid_sample(texture[None], coords[None], mode='bilinear', padding_mode="zeros", align_corners=False)
+    # print(rgb_color)
+    # exit(0)
     rgb_color = rgb_color.squeeze().reshape(C, texture_width, texture_height)
     return rgb_color
 
@@ -65,4 +71,4 @@ def hemispherical_texture_map(direction, texture):
 #     color = hemispherical_texture_map(direction, texture_path)
 #     print(color)
 # except ValueError as e:
-#     print(e)
+#     print(e)     
