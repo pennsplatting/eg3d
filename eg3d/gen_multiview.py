@@ -156,7 +156,7 @@ def generate_images(
 
     # Generate images.
     angle_p = -0.2
-    angle_list = [(angle_y, angle_p) for angle_y in np.arange(-.4, .4, 1.e-3)]
+    angle_list = [(angle_y, angle_p) for angle_y in np.arange(-.4, .4, 3.e-2)]
 
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
