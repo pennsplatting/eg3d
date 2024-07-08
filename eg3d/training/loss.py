@@ -27,6 +27,7 @@ from training.face_parsing.model import BiSeNet
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from torch_utils.tv_loss import TVLoss
+from torch_utils.beta_regularization import BetaRegularizationLoss
 #----------------------------------------------------------------------------
 
 class Loss:
@@ -91,6 +92,9 @@ class StyleGAN2Loss(Loss):
         #     self.decode_fn = VOCSegmentation.decode_target
 
         self.tv_loss = TVLoss()
+        
+        self.beta_regularization = BetaRegularizationLoss()
+      
             
     def segmentation(self, img):
         # n_classes = 19
@@ -300,6 +304,11 @@ class StyleGAN2Loss(Loss):
                 loss_uv_tv = self.tv_loss(uv_image) # input should be shape B C H W
                 training_stats.report('Loss/G/loss_uv_tv', loss_uv_tv)
                 loss_Gmain += loss_uv_tv
+                
+                # Opacity Beta reg
+                loss_beta = self.beta_regularization(gen_img['opacities'])
+                training_stats.report('Loss/G/loss_opacity_beta', loss_beta)
+                loss_Gmain += loss_beta
 
 
             with torch.autograd.profiler.record_function('Gmain_backward'):

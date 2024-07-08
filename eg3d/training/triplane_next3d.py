@@ -339,6 +339,7 @@ class TriPlaneGenerator(torch.nn.Module):
             self.gaussian_debug.update_rgb_textures(self.verts_rgb)
             real_image_batch = []
             uv_image_batch = []
+            opacity_activated_batch = []
             
             
             for _cam2world_matrix, textures_gen in zip(cam2world_matrix, textures_gen_batch):
@@ -370,6 +371,10 @@ class TriPlaneGenerator(torch.nn.Module):
                 res_uv = gs_render(self.viewpoint_camera, self.gaussian, None, background)
                 _uv_image = res_uv["render"]
                 uv_image_batch.append(_uv_image[None])
+
+                # Opacity for beta reg
+                opacity_activated = self.gaussian.get_opacity()
+                opacity_activated_batch.append(opacity_activated)
                 
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
@@ -378,6 +383,8 @@ class TriPlaneGenerator(torch.nn.Module):
             
             uv_image = torch.cat(uv_image_batch) 
             uv_image = (uv_image - 0.5) * 2
+
+            opacities = torch.cat(opacity_activated_batch)
             
             real_image = torch.cat(real_image_batch)
             real_image = torch.where(alpha_image>0, real_image, bg)
@@ -402,7 +409,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
             ### ----- gaussian splatting [END] -----
 
-        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image, 'uv_image': uv_image}
+        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image, 'uv_image': uv_image, 'opacities': opacities}
     
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
