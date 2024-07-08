@@ -338,22 +338,14 @@ class TriPlaneGenerator(torch.nn.Module):
             # FIXME: for debug, init gaussians with gt texture
             self.gaussian_debug.update_rgb_textures(self.verts_rgb)
             real_image_batch = []
+            uv_image_batch = []
             
-            # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
             
-            # for world_view_transform, textures_gen in zip(world_view_transform_batch, textures_gen_batch):
             for _cam2world_matrix, textures_gen in zip(cam2world_matrix, textures_gen_batch):
-                # full_proj_transform = world_view_transform @ projection_matrix
-                # self.viewpoint_camera.update_transforms(intrinsics, world_view_transform)
                 self.viewpoint_camera.update_transforms2(intrinsics, _cam2world_matrix)
 
-                ## TODO: can gaussiam splatting run batch in parallel?
                 textures = F.grid_sample(textures_gen[None], self.raw_uvcoords.unsqueeze(1), align_corners=False) # (1, 48, 1, 5023)
-                # textures.requires_grad_(True) 
-                # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
                 
-                # gaussian.create_from_generated_texture(self.verts, textures)
-                # self.gaussian.create_from_ply2(textures)
                 self.gaussian.update_textures(textures)
                 # raterization
                 white_background = True
@@ -370,10 +362,22 @@ class TriPlaneGenerator(torch.nn.Module):
                 
                 _real_image = gs_render(self.viewpoint_camera, self.gaussian_debug, None, background)["render"]
                 real_image_batch.append(_real_image[None])
+
+                
+                # UV TV loss
+                uv_color = self.raw_uvcoords.unsqueeze(1)
+                self.gaussian.update_rgb_textures(uv_color)
+                res_uv = gs_render(self.viewpoint_camera, self.gaussian, None, background)
+                _uv_image = res_uv["render"]
+                uv_image_batch.append(_uv_image[None])
+                
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
             rgb_image = torch.where(alpha_image>0, rgb_image, bg)
+            
+            uv_image = torch.cat(uv_image_batch) 
+            uv_image = (uv_image - 0.5) * 2
             
             real_image = torch.cat(real_image_batch)
             real_image = torch.where(alpha_image>0, real_image, bg)
@@ -398,7 +402,7 @@ class TriPlaneGenerator(torch.nn.Module):
             # depth_image = torch.zeros_like(rgb_image) # (N, 1, H, W)
             ### ----- gaussian splatting [END] -----
 
-        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image}
+        return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_real': real_image, 'uv_image': uv_image}
     
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):

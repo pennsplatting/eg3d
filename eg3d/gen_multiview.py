@@ -13,7 +13,7 @@
 import os
 import re
 from typing import List, Optional, Tuple, Union
-
+import json
 import click
 import dnnlib
 import numpy as np
@@ -158,6 +158,7 @@ def generate_images(
     angle_p = -0.2
     angle_list = [(angle_y, angle_p) for angle_y in np.arange(-.4, .4, 3.e-2)]
 
+    labels = []
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
@@ -168,6 +169,11 @@ def generate_images(
             cam_pivot = torch.tensor(G.rendering_kwargs.get('avg_camera_pivot', [0, 0, 0]), device=device)
             cam_radius = G.rendering_kwargs.get('avg_camera_radius', 2.7)
             cam2world_pose = LookAtPoseSampler.sample(np.pi/2 + angle_y, np.pi/2 + angle_p, cam_pivot, radius=cam_radius, device=device)
+            label = cam2world_pose.cpu().detach().numpy().flatten()
+            label = np.append(label, intrinsics.cpu().detach().numpy().flatten())
+            label = label.tolist()
+            idx_str = f'{angle_idx:08d}'
+            labels.append([f'{idx_str[:5]}/img{idx_str}.png', label])
             conditioning_cam2world_pose = LookAtPoseSampler.sample(np.pi/2, np.pi/2, cam_pivot, radius=cam_radius, device=device)
             camera_params = torch.cat([cam2world_pose.reshape(-1, 16), intrinsics.reshape(-1, 9)], 1)
             conditioning_params = torch.cat([conditioning_cam2world_pose.reshape(-1, 16), intrinsics.reshape(-1, 9)], 1)
@@ -227,6 +233,17 @@ def generate_images(
         #         with mrcfile.new_mmap(os.path.join(outdir, f'seed{seed:04d}.mrc'), overwrite=True, shape=sigmas.shape, mrc_mode=2) as mrc:
         #             mrc.data[:] = sigmas
 
+    metadata = {
+        'labels': labels
+    }
+    
+    def save_bytes(fname: str, data: Union[bytes, str]):
+        os.makedirs(os.path.dirname(fname), exist_ok=True)
+        with open(fname, 'wb') as fout:
+            if isinstance(data, str):
+                data = data.encode('utf8')
+            fout.write(data)
+    save_bytes(os.path.join(outdir,'dataset.json'), json.dumps(metadata))
 
 #----------------------------------------------------------------------------
 

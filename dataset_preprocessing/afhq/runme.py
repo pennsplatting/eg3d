@@ -15,11 +15,10 @@ import shutil
 import tempfile
 import subprocess
 
-import gdown
 
 parser = argparse.ArgumentParser()
-parser.add_argument('inzip', type=str) # the AFHQ zip downloaded from starganV2 (https://github.com/clovaai/stargan-v2)
-parser.add_argument('outzip', type=str, required=False, default='processed_afhq.zip') # this is the output path to write the new zip
+parser.add_argument('--inzip', type=str) # the AFHQ zip downloaded from starganV2 (https://github.com/clovaai/stargan-v2)
+parser.add_argument('--outzip', type=str, required=False, default='/home/1TB/processed_afhq.zip') # this is the output path to write the new zip
 args = parser.parse_args()
 
 
@@ -46,15 +45,22 @@ except Exception as e:
 with tempfile.TemporaryDirectory() as working_dir:
     cmd = f"""
         unzip {input_dataset_path} -d {working_dir}/extracted_images;
+        mkdir {working_dir}/extracted_images/train;
+        mkdir {working_dir}/extracted_images/train/cat;
         mv {working_dir}/extracted_images/train/cat/ {working_dir}/cat_images/;
     """
     subprocess.run([cmd], shell=True, check=True)
 
 
     """Download dataset.json file"""
-    json_url = 'https://drive.google.com/file/d/1FQXQ26kAgRyN2iOH8CBl3P9CGPIQ5TAQ/view?usp=sharing'
-    gdown.download(json_url, f'{working_dir}/cat_images/dataset.json', quiet=False, fuzzy=True)
-
+    # json_url = 'https://drive.google.com/file/d/1FQXQ26kAgRyN2iOH8CBl3P9CGPIQ5TAQ/view?usp=sharing'
+    # gdown.download(json_url, f'{working_dir}/cat_images/dataset.json', quiet=False, fuzzy=True)
+    cmd = f"""
+        cp /home/1TB/dataset.json {working_dir}/cat_images/dataset.json;
+        mkdir {working_dir}/mirrored_images;
+        cp /home/1TB/dataset.json {working_dir}/mirrored_images/dataset.json;
+    """
+    subprocess.run([cmd], shell=True, check=True)
 
     print("Mirroring dataset...")
     cmd = f"""
