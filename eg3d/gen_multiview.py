@@ -156,7 +156,7 @@ def generate_images(
 
     # Generate images.
     angle_p = -0.2
-    angle_list = [(angle_y, angle_p) for angle_y in np.arange(-.4, .4, 3.e-2)]
+    angle_list = [(angle_y, angle_p) for angle_y in np.arange(-.4, .4, 1.e-2)]
 
     labels = []
     for seed_idx, seed in enumerate(seeds):
