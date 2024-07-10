@@ -380,6 +380,10 @@ class TriPlaneGenerator(torch.nn.Module):
             alpha_image_batch = [] # mask
             depth_image_batch = []
 
+            uv_image_batch = []
+            opacity_activated_batch = []
+            
+
             # c2w_gen = torch.eye(4)[None].repeat(feature_gen_batch.shape[0],1,1).to(feature_gen_batch.device)
             # c2w_gen[:,1:3] *= -1 # lookat: neg z
             # c2w_gen[:,2,3] = 2.69 # z position
@@ -425,6 +429,21 @@ class TriPlaneGenerator(torch.nn.Module):
                     rgb_image_batch.append(_rgb_image[None])
                     alpha_image_batch.append(_alpha_image[None])
                     depth_image_batch.append(_depth_image[None])
+
+                    # Opacity for beta reg
+                    opacity_activated = self.gaussian.get_opacity()
+                    opacity_activated_batch.append(opacity_activated)
+
+                    # UV TV loss
+                    uv_color = self.raw_uvcoords.unsqueeze(1)
+                    self.gaussian.update_rgb_textures(uv_color)
+                    white_background = True
+                    bg_color = [1,1,1] if white_background else [0, 0, 0]
+                    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+                    res_uv = gs_render(self.viewpoint_camera, self.gaussian, None, background)
+                    _uv_image = res_uv["render"]
+                    uv_image_batch.append(_uv_image[None])
+
             else:
                 for _cam2world_matrix, _intrinsics, feature_gen in zip(cam2world_matrix, intrinsics, feature_gen_batch):
                     self.viewpoint_camera.update_transforms2(_intrinsics, _cam2world_matrix)
@@ -452,6 +471,12 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image = (rgb_image - 0.5) * 2
             alpha_image = (alpha_image - 0.5) * 2
 
+            uv_image = torch.cat(uv_image_batch) 
+            uv_image = (uv_image - 0.5) * 2
+
+            opacities = torch.cat(opacity_activated_batch)
+            
+
             # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")
             
             # rgb_image.requires_grad_(True)
@@ -475,9 +500,9 @@ class TriPlaneGenerator(torch.nn.Module):
                 bg = (bg - 0.5) * 2
             ### ----- gaussian splatting [END] -----
         if self.sphere_bg:
-            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge, 'image_bg': bg}
+            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge, 'image_bg': bg, 'uv_image': uv_image, 'opacities': opacities}
         else:
-            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge, 'uv_image':feature_image}
+            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge, 'uv_image': uv_image, 'opacities': opacities}
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
         # Compute RGB features, density for arbitrary 3D coordinates. Mostly used for extracting shapes. 
