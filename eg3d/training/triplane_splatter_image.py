@@ -477,7 +477,7 @@ class TriPlaneGenerator(torch.nn.Module):
         if self.sphere_bg:
             return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge, 'image_bg': bg}
         else:
-            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge}
+            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge, 'uv_image':feature_image}
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
         # Compute RGB features, density for arbitrary 3D coordinates. Mostly used for extracting shapes. 
@@ -551,6 +551,13 @@ class TextureDecoder(torch.nn.Module):
             FullyConnectedLayer(self.hidden_dim, self.out_dim, lr_multiplier=options['decoder_lr_mul'])
         )
         
+        self.offset_conv = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, stride=1, padding=1)
+        
+        # init weights as zeros
+        nn.init.constant_(self.offset_conv.weight, 0)
+        if self.offset_conv.bias is not None:
+            nn.init.constant_(self.offset_conv.bias, 0)
+        
     def forward(self, sampled_features):
         # features (4, 96, 256, 256) -> (4, 16*3, 256, 256)
         # Aggregate features
@@ -591,7 +598,8 @@ class TextureDecoder(torch.nn.Module):
             start_dim += 4
         
         if self.options['gen_xyz_offset']:
-            out['xyz_offset'] = self.xyz_offset_scale * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]) # TODO: whether use this normalize? May constrain the offset not deviate too much
+            # out['xyz_offset'] = self.xyz_offset_scale * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]) # TODO: whether use this normalize? May constrain the offset not deviate too much
+            out['xyz_offset'] = self.offset_conv(x[..., start_dim:start_dim+3].permute(0,3,1,2)).permute(0,2,3,1)
             start_dim += 3
 
 
