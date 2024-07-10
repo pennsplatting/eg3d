@@ -23,7 +23,7 @@ from pdb import set_trace as st
 from torch_utils.extract_edge import EdgeExtractor
 from PIL import Image
 
-from training.face_parsing.model import BiSeNet
+# from training.face_parsing.model import BiSeNet
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from torch_utils.tv_loss import TVLoss

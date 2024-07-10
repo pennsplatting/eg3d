@@ -222,15 +222,53 @@ class TriPlaneGenerator(torch.nn.Module):
         print(self.ray_directions.shape, f"self.ray_directions: {self.ray_directions}")
         exit(0)
         
+    def generate_coordinates(self, img_resolution):
+        x = torch.arange(0, img_resolution, dtype=torch.float32)
+        y = torch.arange(0, img_resolution, dtype=torch.float32)
+        xx, yy = torch.meshgrid(x, y, indexing='ij')
+        coordinates = torch.stack([xx, yy], dim=0) / img_resolution # [2, res, res]
+        
+        zeros = torch.zeros((1, img_resolution, img_resolution), dtype=torch.float32)
+        result = torch.cat([coordinates, zeros], dim=0)
+        return result
+
+    # def load_face_model(self):
+    #     # obj_path = '/root/zxy/data/head_template_5023_align.obj'
+    #     obj_path = '/home/zxy/eg3d/eg3d/data/head_template_5023_align.obj'
+    #     verts, _, _, _  = load_obj(obj_path)
+    #     ### normalize to eg3d
+    #     verts = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+    #     verts = torch.tensor(verts, dtype=torch.float, device='cuda')
+    #     self.register_buffer('verts', verts)
+    #     # self.face_model = GaussianModel(self.sh_degree, verts)
+    def process_uv(self, uv_coords, uv_h = 256, uv_w = 256):
+        return uv_coords*2-1.0
+    
     def load_face_model(self):
-        # obj_path = '/root/zxy/data/head_template_5023_align.obj'
-        obj_path = '/home/zxy/eg3d/eg3d/data/head_template_5023_align.obj'
-        verts, _, _, _  = load_obj(obj_path)
-        ### normalize to eg3d
-        verts = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
-        verts = torch.tensor(verts, dtype=torch.float, device='cuda')
-        self.register_buffer('verts', verts)
-        # self.face_model = GaussianModel(self.sh_degree, verts)
+        # verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
+        ## align with the actual training space of 3dmm, rather than the saved ply space
+        verts_path = 'dataset_preprocessing/3dmm/gs_flipped_uv_textured_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
+                
+        plydata = PlyData.read(verts_path)
+        verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+        # normalize to [-0.5, 0.5] and place the center at origin
+        verts_norm = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+        verts_norm = torch.tensor(verts_norm, dtype=torch.float, device='cuda')
+        self.register_buffer('verts', verts_norm)
+        
+        verts_rgb = np.stack([plydata['vertex'][ax] / 255.0 for ax in ['red', 'green', 'blue']], axis=-1) # [V,3], 0~255 -> 0~1
+        self.register_buffer('verts_rgb', torch.tensor(verts_rgb, dtype=torch.float, device='cuda'))
+        
+        # load uv coords & gt uv map
+        uv_h, uv_w = self.img_resolution, self.img_resolution
+        # uv_coord_path = '../dataset_preprocessing/3dmm/BFM_UV.mat'
+        uv_coord_path = 'dataset_preprocessing/3dmm/BFM_UV.mat'
+        C = sio.loadmat(uv_coord_path)
+        uv_coords = C['UV'].copy(order = 'C') #(53215, 2) = [V, 2]
+    
+        uv_coords_processed = self.process_uv(uv_coords, uv_h, uv_w) #(53215, 2)
+        # uv_coords_processed = uv_coords_processed.astype(np.int32)
+        self.register_buffer('raw_uvcoords', torch.tensor(uv_coords_processed[None], dtype=torch.float, device='cuda')) #[B, V, 2]
 
     def depth_of_object(self, camera : MiniCam):
         # Transform object coordinates to camera coordinates
@@ -431,7 +469,7 @@ class TriPlaneGenerator(torch.nn.Module):
                     depth_image_batch.append(_depth_image[None])
 
                     # Opacity for beta reg
-                    opacity_activated = self.gaussian.get_opacity()
+                    opacity_activated = self.gaussian.get_opacity
                     opacity_activated_batch.append(opacity_activated)
 
                     # UV TV loss
@@ -463,6 +501,21 @@ class TriPlaneGenerator(torch.nn.Module):
                     rgb_image_batch.append(_rgb_image[None])
                     alpha_image_batch.append(_alpha_image[None])
                     depth_image_batch.append(_depth_image[None])
+                    
+                    # Opacity for beta reg
+                    opacity_activated = self.gaussian.get_opacity
+                    opacity_activated_batch.append(opacity_activated)
+
+                    # UV TV loss
+                    # uv_color = self.raw_uvcoords.unsqueeze(1)
+                    uv_color = self.generate_coordinates(self.img_resolution).permute(1,2,0).reshape(-1, 3)
+                    self.gaussian.update_rgb_textures(uv_color)
+                    white_background = True
+                    bg_color = [1,1,1] if white_background else [0, 0, 0]
+                    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+                    res_uv = gs_render(self.viewpoint_camera, self.gaussian, None, background)
+                    _uv_image = res_uv["render"]
+                    uv_image_batch.append(_uv_image[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
