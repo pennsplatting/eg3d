@@ -91,9 +91,9 @@ class StyleGAN2Loss(Loss):
         #     self.segmentation_model = load_segmentation_model()
         #     self.decode_fn = VOCSegmentation.decode_target
 
-        self.tv_loss = TVLoss()
-        
-        self.beta_regularization = BetaRegularizationLoss()
+        self.tv_loss = TVLoss().to(device)
+      
+        self.beta_regularization = BetaRegularizationLoss().to(device)
       
             
     def segmentation(self, img):
