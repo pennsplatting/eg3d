@@ -43,3 +43,8 @@ proj*
 FLAME_PyTorch/
 submodules/
 v3
+
+dataset_preprocessing
+eg3d/out_lgm*
+eg3d/~*
+FFHQ_subset*

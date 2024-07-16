@@ -74,12 +74,12 @@ class StyleGAN2Loss(Loss):
             with dnnlib.util.open_url(network_pkl) as f:
                 self.guide_G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
         if self.edge_discriminate:
-            self.edge_extractor = EdgeExtractor().cuda()
+            self.edge_extractor = EdgeExtractor() # .cuda().to(self.device)
         if self.use_segmentation:
             pth = '/home/1TB/79999_iter.pth'
             n_classes = 19
             self.net = BiSeNet(n_classes=n_classes)
-            self.net.cuda()
+            # self.net .cuda().to(self.device)
             self.net.load_state_dict(torch.load(pth))
             self.net.eval()
 
@@ -519,6 +519,7 @@ class StyleGAN2Loss(Loss):
                             r1_grads = torch.autograd.grad(outputs=[real_logits.sum()], inputs=[real_img_tmp['image']], create_graph=True, only_inputs=True)
                             r1_grads_image = r1_grads[0]
                         r1_penalty = r1_grads_image.square().sum([1,2,3])
+                    # st()
                     loss_Dr1 = r1_penalty * (r1_gamma / 2)
                     training_stats.report('Loss/r1_penalty', r1_penalty)
                     training_stats.report('Loss/D/reg', loss_Dr1)

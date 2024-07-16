@@ -25,7 +25,8 @@ import dnnlib
 ## TODO: recover this import to back to eg3d
 # from training import training_loop
 # from training import training_loop_fast as training_loop
-from training import training_loop_fast_next3d as training_loop
+# from training import training_loop_fast_next3d as training_loop
+from training import training_loop_fast_next3d_accumulate as training_loop
 from metrics import metric_main
 from torch_utils import training_stats
 from torch_utils import custom_ops

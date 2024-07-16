@@ -440,7 +440,6 @@ class TriPlaneGenerator(torch.nn.Module):
             #     depth_image = depth_image.reshape(-1, 1)
             
             # print(f"--textures_gen_batch: min={textures_gen_batch.min()}, max={textures_gen_batch.max()}, mean={textures_gen_batch.mean()}, shape={textures_gen_batch.shape}")
-            ray_origins, ray_directions = self.ray_sampler(cam2world_matrix, intrinsics, self.plane_resolution)
             
             if self.sphere_bg:
                 bg_batch = []
