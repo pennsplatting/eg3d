@@ -78,6 +78,7 @@ class GaussianModel:
         self.znear = 0.1
         self.zfar = 2
         self._xyz = torch.empty(0)
+        self.offset = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
         self._scaling = torch.empty(0)
@@ -313,9 +314,13 @@ class GaussianModel:
     
     def update_xyz_offset(self, xyz_offset):
         # self._xyz = self._xyz_base + xyz_offset
+        self.offset = xyz_offset
         self._xyz += xyz_offset
     
     def update_xyz(self, depth, ray_origins, ray_directions):
+        # print(ray_origins.device, ray_directions.device, depth.device)
+        # ray_origins.to(depth.device)
+        # ray_directions.to(depth.device)
         self._xyz = ray_origins + ray_directions * depth
 
     def update_opacity(self, opacity):

@@ -199,7 +199,8 @@ def parse_comma_separated_list(s):
 @click.option('--sphere_bg',    help='Use multiple splatter images', metavar='BOOL', type=bool, required=False, default=False)
 @click.option('--use_segmentation',    help='Use face segmentation', metavar='BOOL', type=bool, required=False, default=False)
 @click.option('--opacity_reg',    help='Opacity regularization strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=1.0, required=False, show_default=True)
-
+@click.option('--pos_reg',    help='Position regularization strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=0.1, required=False, show_default=True)
+@click.option('--scaling_reg',    help='Scaling regularization strength.', metavar='FLOAT', type=click.FloatRange(min=0), default=0.05, required=False, show_default=True)
 
 @click.option('--blur_fade_kimg', help='Blur over how many', metavar='INT',  type=click.IntRange(min=1), required=False, default=200)
 @click.option('--gen_pose_cond', help='If true, enable generator pose conditioning.', metavar='BOOL',  type=bool, required=False, default=False)
@@ -341,11 +342,14 @@ def main(**kwargs):
         'c_scale': opts.c_scale, # mutliplier for generator pose conditioning label
         'superresolution_noise_mode': opts.sr_noise_mode, # [random or none], whether to inject pixel noise into super-resolution layers
         'density_reg': opts.density_reg, # strength of density regularization
-        'opacity_reg': opts.opacity_reg,
         'density_reg_p_dist': opts.density_reg_p_dist, # distance at which to sample perturbed points for density regularization
         'reg_type': opts.reg_type, # for experimenting with variations on density regularization
         'decoder_lr_mul': opts.decoder_lr_mul, # learning rate multiplier for decoder
         'sr_antialias': True,
+
+        'opacity_reg': opts.opacity_reg,
+        'pos_reg': opts.pos_reg,
+        'scaling_reg': opts.scaling_reg,
     }
 
     if opts.cfg == 'ffhq':

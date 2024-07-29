@@ -117,6 +117,7 @@ class TriPlaneGenerator(torch.nn.Module):
         rendering_kwargs    = {},
         text_decoder_kwargs = {},   # GS TextureDecoder
         sr_kwargs = {},
+        device              = 'cuda',  
         **synthesis_kwargs,         # Arguments for SynthesisNetwork.
     ):
         super().__init__()
@@ -151,6 +152,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.edge_discriminate = edge_discriminate
         self.use_template = use_template
         self.multi_splatter = multi_splatter
+        self.device = device
         # self.gaussian = None
         # self.viewpoint_camera = None
         
@@ -196,15 +198,19 @@ class TriPlaneGenerator(torch.nn.Module):
             self.depth_image = torch.cat((self.depth_image, self.depth_of_object(self.viewpoint_camera2)), dim=0)
             self.text_decoder = TextureDecoder2View(96, text_decoder_options)
         else:
-            c2w_gen = torch.eye(4)[None].to('cuda') 
+            c2w_gen = torch.eye(4)[None].to(device) 
             c2w_gen[:,1:3] *= -1 # lookat: neg z
             c2w_gen[:,2,3] = 2.69 # z position
             intrinsics_gen = torch.tensor([[[2.5000, 0.0000, 0.5000],
                                             [0.0000, 2.5000, 0.5000],
-                                            [0.0000, 0.0000, 1.0000]]]).to('cuda')
+                                            [0.0000, 0.0000, 1.0000]]]).to(device)
             ray_origins, ray_directions = self.ray_sampler(c2w_gen, intrinsics_gen, self.plane_resolution)
-            self.ray_origins = ray_origins[0]
-            self.ray_directions = ray_directions[0]
+            self.ray_origins = ray_origins[0].to(device)
+            self.ray_directions = ray_directions[0].to(device)
+            
+            # self.register_buffer('ray_origins', ray_origins[0].contiguous())
+            # self.register_buffer('ray_directions', ray_directions[0].contiguous())
+            
 
             self.viewpoint_camera2.update_transforms2(intrinsics_gen[0], c2w_gen[0])
             if self.use_template:
@@ -216,7 +222,7 @@ class TriPlaneGenerator(torch.nn.Module):
 
         white_background = True
         bg_color = [1,1,1] if white_background else [0, 0, 0]
-        self.background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+        self.background = torch.tensor(bg_color, dtype=torch.float32, device=device)
         
     def sphere_mapping(self):
         print(self.ray_directions.shape, f"self.ray_directions: {self.ray_directions}")
@@ -253,11 +259,12 @@ class TriPlaneGenerator(torch.nn.Module):
         verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
         # normalize to [-0.5, 0.5] and place the center at origin
         verts_norm = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
-        verts_norm = torch.tensor(verts_norm, dtype=torch.float, device='cuda')
+        print(self.device)
+        verts_norm = torch.tensor(verts_norm, dtype=torch.float, device=self.device)
         self.register_buffer('verts', verts_norm)
         
         verts_rgb = np.stack([plydata['vertex'][ax] / 255.0 for ax in ['red', 'green', 'blue']], axis=-1) # [V,3], 0~255 -> 0~1
-        self.register_buffer('verts_rgb', torch.tensor(verts_rgb, dtype=torch.float, device='cuda'))
+        self.register_buffer('verts_rgb', torch.tensor(verts_rgb, dtype=torch.float, device=self.device))
         
         # load uv coords & gt uv map
         uv_h, uv_w = self.img_resolution, self.img_resolution
@@ -268,12 +275,12 @@ class TriPlaneGenerator(torch.nn.Module):
     
         uv_coords_processed = self.process_uv(uv_coords, uv_h, uv_w) #(53215, 2)
         # uv_coords_processed = uv_coords_processed.astype(np.int32)
-        self.register_buffer('raw_uvcoords', torch.tensor(uv_coords_processed[None], dtype=torch.float, device='cuda')) #[B, V, 2]
+        self.register_buffer('raw_uvcoords', torch.tensor(uv_coords_processed[None], dtype=torch.float, device=self.device)) #[B, V, 2]
 
     def depth_of_object(self, camera : MiniCam):
         # Transform object coordinates to camera coordinates
-        object_coords_homogeneous = torch.cat((self.verts, torch.ones((self.verts.shape[0], 1), dtype=torch.float32, device='cuda')), dim=1)
-
+        object_coords_homogeneous = torch.cat((self.verts, torch.ones((self.verts.shape[0], 1), dtype=torch.float32, device=self.device)), dim=1)
+        print(object_coords_homogeneous.device, camera.full_proj_transform.device)
         # # Apply perspective projection
         object_coords_camera = torch.matmul(object_coords_homogeneous, camera.full_proj_transform)
         
@@ -281,10 +288,10 @@ class TriPlaneGenerator(torch.nn.Module):
         projected_coords = object_coords_camera[:, :2] / object_coords_camera[:, 2:]
 
         # Normalize points to image coordinates
-        projected_coords = (projected_coords + 1) * torch.tensor([camera.image_width, camera.image_height], device='cuda')[None, :] / 2
+        projected_coords = (projected_coords + 1) * torch.tensor([camera.image_width, camera.image_height], device=self.device)[None, :] / 2
         
         # Initialize depth image with maximum depth value
-        depth_image = torch.full((camera.image_height, camera.image_width), self.z_far, dtype=torch.float32, device='cuda')
+        depth_image = torch.full((camera.image_height, camera.image_width), self.z_far, dtype=torch.float32, device=self.device)
         # Calculate depth for each projected point and update depth image
         for i in range(self.verts.shape[0]):
             u, v = projected_coords[i, :2].round().int()
@@ -305,7 +312,7 @@ class TriPlaneGenerator(torch.nn.Module):
             _depth = feature_gen[:,start_dim:start_dim+1]
 
         self.gaussian.update_xyz(_depth, self.ray_origins, self.ray_directions)
-
+       
         start_dim += 1
 
         if self.text_decoder.options['gen_rgb']:
@@ -420,6 +427,8 @@ class TriPlaneGenerator(torch.nn.Module):
 
             uv_image_batch = []
             opacity_activated_batch = []
+            offset_batch = []
+            scale_activated_batch = []
             
 
             # c2w_gen = torch.eye(4)[None].repeat(feature_gen_batch.shape[0],1,1).to(feature_gen_batch.device)
@@ -505,13 +514,19 @@ class TriPlaneGenerator(torch.nn.Module):
                     opacity_activated = self.gaussian.get_opacity
                     opacity_activated_batch.append(opacity_activated)
 
+                    scale_activated = self.gaussian.get_scaling
+                    scale_activated_batch.append(scale_activated)
+                
+                    offset = self.gaussian.offset
+                    offset_batch.append(offset)
+
                     # UV TV loss
                     # uv_color = self.raw_uvcoords.unsqueeze(1)
                     uv_color = self.generate_coordinates(self.img_resolution).permute(1,2,0).reshape(-1, 3)
                     self.gaussian.update_rgb_textures(uv_color)
                     white_background = True
                     bg_color = [1,1,1] if white_background else [0, 0, 0]
-                    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+                    background = torch.tensor(bg_color, dtype=torch.float32, device=self.device)
                     res_uv = gs_render(self.viewpoint_camera, self.gaussian, None, background)
                     _uv_image = res_uv["render"]
                     uv_image_batch.append(_uv_image[None])
@@ -527,7 +542,8 @@ class TriPlaneGenerator(torch.nn.Module):
             uv_image = (uv_image - 0.5) * 2
 
             opacities = torch.cat(opacity_activated_batch)
-            
+            scale = torch.cat(scale_activated_batch)
+            offset = torch.cat(offset_batch)
 
             # print(f"-rgb_image: min={rgb_image.min()}, max={rgb_image.max()}, mean={rgb_image.mean()}, shape={rgb_image.shape}")
             
@@ -554,7 +570,7 @@ class TriPlaneGenerator(torch.nn.Module):
         if self.sphere_bg:
             return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge, 'image_bg': bg, 'uv_image': uv_image, 'opacities': opacities}
         else:
-            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'image_edge': image_edge, 'uv_image': uv_image, 'opacities': opacities}
+            return {'image': sr_image, 'image_raw': rgb_image, 'image_mask': alpha_image, 'image_depth': depth_image, 'uv_image': uv_image, 'opacities': opacities, 'M_pos': offset, 'scale': scale}
     
     def sample(self, coordinates, directions, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False, **synthesis_kwargs):
         # Compute RGB features, density for arbitrary 3D coordinates. Mostly used for extracting shapes. 
@@ -666,6 +682,7 @@ class TextureDecoder(torch.nn.Module):
             start_dim += 1
         
         if self.options['gen_scaling']:
+            # out['scaling'] = x[..., start_dim:start_dim+3].reshape(N, H, W, 3)
             out['scaling'] = self.scale_bias + self.scale_factor * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]).reshape(N, H, W, 3)
             # out['scaling'] = torch.clamp(torch.exp(x[..., start_dim:start_dim+3].reshape(-1,3)), max=self.options['max_scaling']).reshape(N, H, W, 3)
             start_dim += 3

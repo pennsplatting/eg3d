@@ -286,8 +286,10 @@ class StyleGAN2Loss(Loss):
 
         if self.use_segmentation:
             real_img = {'image': real_img, 'image_raw': real_img_raw, 'image_edge': real_img_edge, 'image_mask': real_img_mask} # no loss is calculated based on depth 
-        else:
+        elif self.edge_discriminate:
             real_img = {'image': real_img, 'image_raw': real_img_raw, 'image_edge': real_img_edge}
+        else:
+            real_img = {'image': real_img, 'image_raw': real_img_raw}
             
         # Gmain: Maximize logits for generated images.
         if phase in ['Gmain', 'Gboth']:
@@ -299,31 +301,32 @@ class StyleGAN2Loss(Loss):
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits)
                 training_stats.report('Loss/G/loss', loss_Gmain)
                 
-                # UV tv loss
-                uv_image = gen_img['uv_image']
-                loss_uv_tv = self.tv_loss(uv_image) # input should be shape B C H W
-                training_stats.report('Loss/G/loss_uv_tv', loss_uv_tv)
-                loss_Gmain += loss_uv_tv
+                # # UV tv loss
+                # uv_image = gen_img['uv_image']
+                # loss_uv_tv = self.tv_loss(uv_image) # input should be shape B C H W
+                # training_stats.report('Loss/G/loss_uv_tv', loss_uv_tv)
+                # loss_Gmain += loss_uv_tv
                 
-                # Opacity Beta reg
-                loss_beta = self.beta_regularization(gen_img['opacities'])
-                training_stats.report('Loss/G/loss_opacity_beta', loss_beta)
-                loss_Gmain += loss_beta
+                # # Opacity Beta reg
+                # loss_beta = self.beta_regularization(gen_img['opacities'])
+                # training_stats.report('Loss/G/loss_opacity_beta', loss_beta)
+                # loss_Gmain += loss_beta
+                
 
 
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 loss_Gmain.mean().mul(gain).backward()
 
-            if self.depth_distill:
-                gen_img, _gen_ws, c_gen_conditioning = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
-                ws = self.guide_G.mapping(gen_z, c_gen_conditioning, update_emas=False)
-                guide_img = self.guide_G.synthesis(ws, gen_c)
-                # print(guide_img["image_depth"].max(), guide_img["image_depth"].min(), gen_img["image_depth"].max(), gen_img["image_depth"].min())
-                # print(gen_img["image_depth"].shape, guide_img["image_depth"].shape,gen_img["image"].shape, guide_img["image"][:,:,::4, ::4].shape)
-                # exit(0)
-                loss_guide = torch.nn.functional.l1_loss(gen_img["image_depth"], guide_img["image_depth"]) # + torch.nn.functional.l1_loss(gen_img["image"], guide_img["image"][:,:,::4, ::4])
-                training_stats.report('Loss/G/loss_guide', loss_guide)
-                loss_guide.mul(gain).backward()
+            # if self.depth_distill:
+            #     gen_img, _gen_ws, c_gen_conditioning = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
+            #     ws = self.guide_G.mapping(gen_z, c_gen_conditioning, update_emas=False)
+            #     guide_img = self.guide_G.synthesis(ws, gen_c)
+            #     # print(guide_img["image_depth"].max(), guide_img["image_depth"].min(), gen_img["image_depth"].max(), gen_img["image_depth"].min())
+            #     # print(gen_img["image_depth"].shape, guide_img["image_depth"].shape,gen_img["image"].shape, guide_img["image"][:,:,::4, ::4].shape)
+            #     # exit(0)
+            #     loss_guide = torch.nn.functional.l1_loss(gen_img["image_depth"], guide_img["image_depth"]) # + torch.nn.functional.l1_loss(gen_img["image"], guide_img["image"][:,:,::4, ::4])
+            #     training_stats.report('Loss/G/loss_guide', loss_guide)
+            #     loss_guide.mul(gain).backward()
             
             
                 
@@ -338,7 +341,31 @@ class StyleGAN2Loss(Loss):
             #             # print(f"Gradients for {name} have NOT been computed!!")
             #     print(f"Gradients for self.G -----end---")
             # st()
-                
+
+        if phase in ['Greg', 'Gboth']:
+            loss_Greg = 0
+            gen_img, _, _ = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
+            
+            # opacity beta reg
+            loss_beta = self.beta_regularization(gen_img['opacities'])
+            training_stats.report('Loss/G/loss_opacity_beta', loss_beta)
+            loss_Greg += loss_beta * self.G.rendering_kwargs['opacity_reg']
+
+            # position reg
+            pos = gen_img['M_pos']
+            loss_pos = torch.nn.functional.mse_loss(pos, torch.zeros_like(pos, device=pos.device)) * self.G.rendering_kwargs['pos_reg']
+            training_stats.report('Loss/G/loss_pos', loss_pos)
+            loss_Greg += loss_pos
+
+            # scaling reg
+            scaling = gen_img['scale']
+            gamma = torch.exp(torch.ones_like(scaling, device=scaling.device) * -5)
+            loss_scaling = torch.nn.functional.mse_loss(scaling, gamma) * self.G.rendering_kwargs['scaling_reg']
+            training_stats.report('Loss/G/loss_scaling', loss_scaling)
+            loss_Greg += loss_scaling
+
+            loss_Greg.mul(gain).backward()
+
         # if phase in ['Greg', 'Gboth'] and self.G.rendering_kwargs['reg_type'] == 'l1': # opacity reg
         #     gen_img, _, _ = self.run_G(gen_z, gen_c, swapping_prob=swapping_prob, neural_rendering_resolution=neural_rendering_resolution)
         #     alpha_img = gen_img['image_mask']
@@ -477,7 +504,8 @@ class StyleGAN2Loss(Loss):
             with torch.autograd.profiler.record_function(name + '_forward'):
                 real_img_tmp_image = real_img['image'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
                 real_img_tmp_image_raw = real_img['image_raw'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
-                real_img_tmp_image_edge = real_img['image_edge'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
+                if self.edge_discriminate:
+                    real_img_tmp_image_edge = real_img['image_edge'].detach().requires_grad_(phase in ['Dreg', 'Dboth'])
                 if self.use_segmentation:
                     real_img_tmp_image_mask = real_img['image_mask'].detach().requires_grad_(phase in ['Dreg', 'Dboth']) # [N, C, H, W]
                 # # print(real_img['image_mask'].max(1))
@@ -494,9 +522,11 @@ class StyleGAN2Loss(Loss):
                 # exit(0)
                 if self.use_segmentation:
                     real_img_tmp = {'image': real_img_tmp_image, 'image_raw': real_img_tmp_image_raw, 'image_edge': real_img_tmp_image_edge, 'image_mask': real_img_tmp_image_mask}
-                else:
+                elif self.edge_discriminate:
                     real_img_tmp = {'image': real_img_tmp_image, 'image_raw': real_img_tmp_image_raw, 'image_edge': real_img_tmp_image_edge}
-                    
+                else:
+                    real_img_tmp = {'image': real_img_tmp_image, 'image_raw': real_img_tmp_image_raw}
+
                 real_logits = self.run_D(real_img_tmp, real_c, blur_sigma=blur_sigma)
                 training_stats.report('Loss/scores/real', real_logits)
                 training_stats.report('Loss/signs/real', real_logits.sign())
@@ -510,7 +540,7 @@ class StyleGAN2Loss(Loss):
                 if phase in ['Dreg', 'Dboth']:
                     if self.dual_discrimination:
                         with torch.autograd.profiler.record_function('r1_grads'), conv2d_gradfix.no_weight_gradients():
-                            r1_grads = torch.autograd.grad(outputs=[real_logits.sum()], inputs=[real_img_tmp['image'], real_img_tmp['image_edge']], create_graph=True, only_inputs=True)
+                            r1_grads = torch.autograd.grad(outputs=[real_logits.sum()], inputs=[real_img_tmp['image'], real_img_tmp['image_raw']], create_graph=True, only_inputs=True)
                             r1_grads_image = r1_grads[0]
                             r1_grads_image_raw = r1_grads[1]
                         r1_penalty = r1_grads_image.square().sum([1,2,3]) + r1_grads_image_raw.square().sum([1,2,3])
