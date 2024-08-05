@@ -68,7 +68,7 @@ class GaussianModel:
 
         self.rotation_activation = torch.nn.functional.normalize
         
-        self.depth_act = nn.Sigmoid()
+        # self.depth_act = nn.Sigmoid()
 
 
     def __init__(self, sh_degree : int, verts=None):
@@ -78,7 +78,7 @@ class GaussianModel:
         self.znear = 0.1
         self.zfar = 2
         self._xyz = torch.empty(0)
-        self.offset = torch.empty(0)
+        self._offset = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
         self._scaling = torch.empty(0)
@@ -312,10 +312,9 @@ class GaussianModel:
         self._features_dc = features[:,:,0:1].transpose(1, 2).contiguous()#.requires_grad_(True) # [V, 1, 3]
         self._features_rest = features[:,:,1:].transpose(1, 2).contiguous()#.requires_grad_(True)# [V, sh degree - 1, 3]
     
-    def update_xyz_offset(self, xyz_offset):
-        # self._xyz = self._xyz_base + xyz_offset
+    def update_xyz_offset(self, base, xyz_offset):
+        self._xyz = base + xyz_offset
         self.offset = xyz_offset
-        self._xyz += xyz_offset
     
     def update_xyz(self, depth, ray_origins, ray_directions):
         # print(ray_origins.device, ray_directions.device, depth.device)
@@ -346,6 +345,7 @@ class GaussianModel:
 
         features = torch.zeros((self._xyz.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
         ## FIXME: although all features are mapped from RGB[0,1] to SH now, the original GS uses 0 for self._feature_rest
+        # print(feature_uv.shape)
         features[:,:3, 0] = RGB2SH(feature_uv) # (53215, 3): 0~1 -> -1.7~+1.7
         features[:, 3:, 1:] = 0.0
 

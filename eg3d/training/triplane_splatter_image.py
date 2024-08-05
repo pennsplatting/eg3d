@@ -130,7 +130,7 @@ class TriPlaneGenerator(torch.nn.Module):
         self.ray_sampler = RaySampler()
         # TODO: maybe synthesize uv texture directly with stylegan2 backbone (img_channels=3)
         # so that there's no need for decoder
-        self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=plane_resolution, img_channels=96, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
+        self.backbone = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=plane_resolution, img_channels=14, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
         self.sphere_bg = sphere_bg
         if sphere_bg:
             self.backbone_bg = StyleGAN2Backbone(z_dim, c_dim, w_dim, img_resolution=img_resolution, img_channels=3, mapping_kwargs=mapping_kwargs, **synthesis_kwargs)
@@ -168,12 +168,11 @@ class TriPlaneGenerator(torch.nn.Module):
         self.z_near = 0.1
         self.z_far = 4 # TODO: find suitable value for this
         self.viewpoint_camera = MiniCam(image_size, image_size, self.z_near, self.z_far)
-        self.gaussian = GaussianModel(self.sh_degree)
         
         ### -------- gaussian splatting render --------
-        if self.use_template:
-            self.load_face_model()
-        self.depth_image = None
+        self.load_face_model()
+        self.gaussian = GaussianModel(self.sh_degree)
+        # self.depth_image = None
         self.viewpoint_camera2 = MiniCam(plane_resolution, plane_resolution, self.z_near, self.z_far)
         
         if self.multi_splatter:
@@ -204,18 +203,18 @@ class TriPlaneGenerator(torch.nn.Module):
             intrinsics_gen = torch.tensor([[[2.5000, 0.0000, 0.5000],
                                             [0.0000, 2.5000, 0.5000],
                                             [0.0000, 0.0000, 1.0000]]]).to(device)
-            ray_origins, ray_directions = self.ray_sampler(c2w_gen, intrinsics_gen, self.plane_resolution)
-            self.ray_origins = ray_origins[0].to(device)
-            self.ray_directions = ray_directions[0].to(device)
+            # ray_origins, ray_directions = self.ray_sampler(c2w_gen, intrinsics_gen, self.plane_resolution)
+            # self.ray_origins = ray_origins[0].to(device)
+            # self.ray_directions = ray_directions[0].to(device)
             
             # self.register_buffer('ray_origins', ray_origins[0].contiguous())
             # self.register_buffer('ray_directions', ray_directions[0].contiguous())
             
 
-            self.viewpoint_camera2.update_transforms2(intrinsics_gen[0], c2w_gen[0])
-            if self.use_template:
-                self.depth_image = self.depth_of_object(self.viewpoint_camera2)
-            self.text_decoder = TextureDecoder(96, text_decoder_options)
+            # self.viewpoint_camera2.update_transforms2(intrinsics_gen[0], c2w_gen[0])
+            # if self.use_template:
+            #     self.depth_image = self.depth_of_object(self.viewpoint_camera2)
+            self.text_decoder = TextureDecoder(14, text_decoder_options)
 
         if self.edge_discriminate:
             self.edge_extractor = EdgeExtractor().cuda()
@@ -223,6 +222,7 @@ class TriPlaneGenerator(torch.nn.Module):
         white_background = True
         bg_color = [1,1,1] if white_background else [0, 0, 0]
         self.background = torch.tensor(bg_color, dtype=torch.float32, device=device)
+        print("Generator init completed.")
         
     def sphere_mapping(self):
         print(self.ray_directions.shape, f"self.ray_directions: {self.ray_directions}")
@@ -238,49 +238,61 @@ class TriPlaneGenerator(torch.nn.Module):
         result = torch.cat([coordinates, zeros], dim=0)
         return result
 
-    # def load_face_model(self):
-    #     # obj_path = '/root/zxy/data/head_template_5023_align.obj'
-    #     obj_path = '/home/zxy/eg3d/eg3d/data/head_template_5023_align.obj'
-    #     verts, _, _, _  = load_obj(obj_path)
-    #     ### normalize to eg3d
-    #     verts = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
-    #     verts = torch.tensor(verts, dtype=torch.float, device='cuda')
-    #     self.register_buffer('verts', verts)
-    #     # self.face_model = GaussianModel(self.sh_degree, verts)
+    def load_face_model(self):
+        # obj_path = '/home/zxy/eg3d/eg3d/data/head_template_5023_align.obj'
+        obj_path = 'dataset_preprocessing/3dmm/head_template_27957_eg3d_space_final.obj'
+        verts, uv_coords, _, _  = load_obj(obj_path)
+        # print(uv_coords.shape)
+        # exit(0)
+        
+        ### normalize to eg3d
+        verts.to(self.device)
+        uv_coords.to(self.device)
+        uv_coords = self.process_uv(uv_coords)
+        # print(uv_coords.max(), uv_coords.min())
+        # exit(0)
+        verts = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+        # verts = torch.tensor(verts, dtype=torch.float, device='cuda')
+        self.register_buffer('verts', verts) # [5023, 3]
+        self.register_buffer('uvcoords', uv_coords) # [5023, 2]
+        # print(self.verts.shape, self.uvcoords.shape)
+        # exit(0)
+        # self.face_model = GaussianModel(self.sh_degree, verts)
+
     def process_uv(self, uv_coords, uv_h = 256, uv_w = 256):
         return uv_coords*2-1.0
     
-    def load_face_model(self):
-        # verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
-        ## align with the actual training space of 3dmm, rather than the saved ply space
-        verts_path = 'dataset_preprocessing/3dmm/gs_flipped_uv_textured_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
+    # def load_face_model(self):
+    #     # verts_path = '../dataset_preprocessing/3dmm/gs_colored_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
+    #     ## align with the actual training space of 3dmm, rather than the saved ply space
+    #     verts_path = 'dataset_preprocessing/3dmm/gs_flipped_uv_textured_vertices_700norm.ply' # aligned with eg3d mesh in both scale and cam coord
                 
-        plydata = PlyData.read(verts_path)
-        verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
-        # normalize to [-0.5, 0.5] and place the center at origin
-        verts_norm = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
-        print(self.device)
-        verts_norm = torch.tensor(verts_norm, dtype=torch.float, device=self.device)
-        self.register_buffer('verts', verts_norm)
+    #     plydata = PlyData.read(verts_path)
+    #     verts = np.stack([plydata['vertex'][ax] for ax in ['x', 'y', 'z']], axis=-1) # [V,3]
+    #     # normalize to [-0.5, 0.5] and place the center at origin
+    #     verts_norm = verts / 512.0 - self.rendering_kwargs['box_warp'] / 2
+    #     # print(self.device)
+    #     verts_norm = torch.tensor(verts_norm, dtype=torch.float)
+    #     self.register_buffer('verts', verts_norm)
         
-        verts_rgb = np.stack([plydata['vertex'][ax] / 255.0 for ax in ['red', 'green', 'blue']], axis=-1) # [V,3], 0~255 -> 0~1
-        self.register_buffer('verts_rgb', torch.tensor(verts_rgb, dtype=torch.float, device=self.device))
+    #     verts_rgb = np.stack([plydata['vertex'][ax] / 255.0 for ax in ['red', 'green', 'blue']], axis=-1) # [V,3], 0~255 -> 0~1
+    #     self.register_buffer('verts_rgb', torch.tensor(verts_rgb, dtype=torch.float))
         
-        # load uv coords & gt uv map
-        uv_h, uv_w = self.img_resolution, self.img_resolution
-        # uv_coord_path = '../dataset_preprocessing/3dmm/BFM_UV.mat'
-        uv_coord_path = 'dataset_preprocessing/3dmm/BFM_UV.mat'
-        C = sio.loadmat(uv_coord_path)
-        uv_coords = C['UV'].copy(order = 'C') #(53215, 2) = [V, 2]
+    #     # load uv coords & gt uv map
+    #     uv_h, uv_w = self.img_resolution, self.img_resolution
+    #     # uv_coord_path = '../dataset_preprocessing/3dmm/BFM_UV.mat'
+    #     uv_coord_path = 'dataset_preprocessing/3dmm/BFM_UV.mat'
+    #     C = sio.loadmat(uv_coord_path)
+    #     uv_coords = C['UV'].copy(order = 'C') #(53215, 2) = [V, 2]
     
-        uv_coords_processed = self.process_uv(uv_coords, uv_h, uv_w) #(53215, 2)
-        # uv_coords_processed = uv_coords_processed.astype(np.int32)
-        self.register_buffer('raw_uvcoords', torch.tensor(uv_coords_processed[None], dtype=torch.float, device=self.device)) #[B, V, 2]
+    #     uv_coords_processed = self.process_uv(uv_coords, uv_h, uv_w) #(53215, 2)
+    #     # uv_coords_processed = uv_coords_processed.astype(np.int32)
+    #     self.register_buffer('raw_uvcoords', torch.tensor(uv_coords_processed[None], dtype=torch.float)) #[B, V, 2]
 
     def depth_of_object(self, camera : MiniCam):
         # Transform object coordinates to camera coordinates
-        object_coords_homogeneous = torch.cat((self.verts, torch.ones((self.verts.shape[0], 1), dtype=torch.float32, device=self.device)), dim=1)
-        print(object_coords_homogeneous.device, camera.full_proj_transform.device)
+        object_coords_homogeneous = torch.cat((self.verts, torch.ones(self.verts.shape[0], 1)), dim=1).to(self.device)
+        # print(object_coords_homogeneous.device, camera.full_proj_transform.device)
         # # Apply perspective projection
         object_coords_camera = torch.matmul(object_coords_homogeneous, camera.full_proj_transform)
         
@@ -303,20 +315,25 @@ class TriPlaneGenerator(torch.nn.Module):
     def update_gaussian(self, feature_gen): # use 1 splatter image at front view
         start_dim = 0
 
-        if self.use_template:
-            _depth = torch.where(
-                self.depth_image < 3.0,
-                self.depth_image, # if true 
-                feature_gen[:,start_dim:start_dim+1]) # if false
-        else:
-            _depth = feature_gen[:,start_dim:start_dim+1]
+        # if self.use_template:
+        #     _depth = torch.where(
+        #         self.depth_image < 3.0,
+        #         self.depth_image, # if true 
+        #         feature_gen[:,start_dim:start_dim+1]) # if false
+        # else:
+        #     _depth = feature_gen[:,start_dim:start_dim+1]
 
-        self.gaussian.update_xyz(_depth, self.ray_origins, self.ray_directions)
+        # self.gaussian.update_xyz(_depth, self.ray_origins, self.ray_directions)
        
-        start_dim += 1
+        # start_dim += 1
+        if self.text_decoder.options['gen_xyz_offset']:
+            _xyz_offset = feature_gen[:,start_dim:start_dim+3]
+            self.gaussian.update_xyz_offset(self.verts, _xyz_offset)
+            start_dim += 3
 
         if self.text_decoder.options['gen_rgb']:
             _rgb = feature_gen[:,start_dim:start_dim+3]
+            # print("max ", _rgb.max(), " min ", _rgb.min())
             start_dim += 3
             self.gaussian.update_rgb_textures(_rgb)
         
@@ -340,10 +357,6 @@ class TriPlaneGenerator(torch.nn.Module):
             self.gaussian.update_rotation(_rotation)
             start_dim += 4
         
-        if self.text_decoder.options['gen_xyz_offset']:
-            _xyz_offset = feature_gen[:,start_dim:start_dim+3]
-            self.gaussian.update_xyz_offset(_xyz_offset)
-            start_dim += 3
 
     def mapping(self, z, c, truncation_psi=1, truncation_cutoff=None, update_emas=False):
         if self.rendering_kwargs['c_gen_conditioning_zero']:
@@ -413,13 +426,18 @@ class TriPlaneGenerator(torch.nn.Module):
         else:
             
             ### ----- gaussian splatting -----
-
+            
             feature_image = self.text_decoder(planes)
-            if self.multi_splatter:
-                feature_gen_batch = feature_image
-            else: 
-                B, K, H, W = feature_image.shape
-                feature_gen_batch = feature_image.permute(0,2,3,1).reshape(B, H*W, K).contiguous()
+            B, K, H, W = feature_image.shape
+            # if self.multi_splatter:
+            #     feature_gen_batch = feature_image
+            # else: 
+            #     B, K, H, W = feature_image.shape
+            #     feature_gen_batch = feature_image.permute(0,2,3,1).reshape(B, H*W, K).contiguous()
+
+            grid = self.uvcoords.unsqueeze(1).unsqueeze(0).repeat(B,1,1,1) # [B,5023,1,2]
+            texture_batch = F.grid_sample(feature_image, grid, align_corners=False).squeeze().permute(0,2,1) # [B, 14, 5023, 1] -> [B, 5023, 14]
+            # print("max ", texture_batch[:,:, 3:6].max())
             
             rgb_image_batch = []
             alpha_image_batch = [] # mask
@@ -491,7 +509,8 @@ class TriPlaneGenerator(torch.nn.Module):
                     uv_image_batch.append(_uv_image[None])
 
             else:
-                for _cam2world_matrix, _intrinsics, feature_gen in zip(cam2world_matrix, intrinsics, feature_gen_batch):
+                # for _cam2world_matrix, _intrinsics, feature_gen in zip(cam2world_matrix, intrinsics, feature_gen_batch):
+                for _cam2world_matrix, _intrinsics, texture in zip(cam2world_matrix, intrinsics, texture_batch):
                     self.viewpoint_camera.update_transforms2(_intrinsics, _cam2world_matrix)
 
                     ## TODO: can gaussiam splatting run batch in parallel?
@@ -499,7 +518,7 @@ class TriPlaneGenerator(torch.nn.Module):
                     # textures.requires_grad_(True) 
                     # textures.register_hook(lambda grad: print_grad("--textures.requires_grad", grad))
 
-                    self.update_gaussian(feature_gen)
+                    self.update_gaussian(texture) # [5032, 14]
                                 
                     res = gs_render(self.viewpoint_camera, self.gaussian, None, self.background)
                     _rgb_image = res["render"]
@@ -522,14 +541,15 @@ class TriPlaneGenerator(torch.nn.Module):
 
                     # UV TV loss
                     # uv_color = self.raw_uvcoords.unsqueeze(1)
-                    uv_color = self.generate_coordinates(self.img_resolution).permute(1,2,0).reshape(-1, 3)
-                    self.gaussian.update_rgb_textures(uv_color)
-                    white_background = True
-                    bg_color = [1,1,1] if white_background else [0, 0, 0]
-                    background = torch.tensor(bg_color, dtype=torch.float32, device=self.device)
-                    res_uv = gs_render(self.viewpoint_camera, self.gaussian, None, background)
-                    _uv_image = res_uv["render"]
-                    uv_image_batch.append(_uv_image[None])
+                    # uv_color = self.generate_coordinates(self.img_resolution).permute(1,2,0).reshape(-1, 3)
+                    # self.gaussian.update_rgb_textures(uv_color)
+                    # white_background = True
+                    # bg_color = [1,1,1] if white_background else [0, 0, 0]
+                    # background = torch.tensor(bg_color, dtype=torch.float32, device=self.device)
+                    # res_uv = gs_render(self.viewpoint_camera, self.gaussian, None, background)
+                    # _uv_image = res_uv["render"]
+                    # _uv_image = 
+                    # uv_image_batch.append(_uv_image[None])
             
             rgb_image = torch.cat(rgb_image_batch) # [4, 3, gs_res, gs_res]
             alpha_image = torch.cat(alpha_image_batch)
@@ -538,7 +558,9 @@ class TriPlaneGenerator(torch.nn.Module):
             rgb_image = (rgb_image - 0.5) * 2
             alpha_image = (alpha_image - 0.5) * 2
 
-            uv_image = torch.cat(uv_image_batch) 
+            uv_image = feature_image[:,3:6,:,:] # 0~1
+            # print("max ", uv_image.max(), " min ", uv_image.min())
+            # uv_image = torch.cat(uv_image_batch) 
             uv_image = (uv_image - 0.5) * 2
 
             opacities = torch.cat(opacity_activated_batch)
@@ -638,13 +660,14 @@ class TextureDecoder(torch.nn.Module):
         self.scale_bias = options['scale_bias']
         self.scale_factor = options['scale_factor']
 
-        self.net = torch.nn.Sequential(
-            FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
-            torch.nn.Softplus(),
-            FullyConnectedLayer(self.hidden_dim, self.out_dim, lr_multiplier=options['decoder_lr_mul'])
-        )
+        # self.net = torch.nn.Sequential(
+        #     FullyConnectedLayer(n_features, self.hidden_dim, lr_multiplier=options['decoder_lr_mul']),
+        #     torch.nn.Softplus(),
+        #     FullyConnectedLayer(self.hidden_dim, self.out_dim, lr_multiplier=options['decoder_lr_mul'])
+        # )
         
         self.offset_conv = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, stride=1, padding=1)
+        self.pos_act = nn.Tanh()
         
         # init weights as zeros
         nn.init.constant_(self.offset_conv.weight, 0)
@@ -658,19 +681,24 @@ class TextureDecoder(torch.nn.Module):
         x = sampled_features
 
         N, H, W, C = x.shape
-        x = x.reshape(N*H*W, C)
+        # x = x.reshape(N*H*W, C)
         
-        x = self.net(x)
-        x = x.reshape(N, H, W, -1)
+        # # x = self.net(x) # TODO: delecte the net 
+        # x = x.reshape(N, H, W, -1)
 
         start_dim = 0
         out = {}
 
-        out['depth'] = self.depth_bias + self.depth_factor * torch.nn.functional.normalize(x[..., start_dim:start_dim+1])
-        start_dim += 1
+        # out['depth'] = self.depth_bias + self.depth_factor * torch.nn.functional.normalize(x[..., start_dim:start_dim+1])
+        # start_dim += 1
+        if self.options['gen_xyz_offset']:
+            # out['xyz_offset'] = self.xyz_offset_scale * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]) # TODO: whether use this normalize? May constrain the offset not deviate too much
+            out['xyz_offset'] = self.pos_act(self.offset_conv(x[..., start_dim:start_dim+3].permute(0,3,1,2)).permute(0,2,3,1))
+            start_dim += 3
 
         if self.options['gen_rgb']:
             out['rgb'] = torch.sigmoid(x[..., start_dim:start_dim+3])*(1 + 2*0.001) - 0.001
+            # print("max ", out['rgb'].max(), " min ", out['rgb'].min())
             start_dim += 3
         
         if self.options['gen_sh']:
@@ -682,7 +710,7 @@ class TextureDecoder(torch.nn.Module):
             start_dim += 1
         
         if self.options['gen_scaling']:
-            # out['scaling'] = x[..., start_dim:start_dim+3].reshape(N, H, W, 3)
+            # out['scaling'] = self.scale_bias + x[..., start_dim:start_dim+3].reshape(N, H, W, 3)
             out['scaling'] = self.scale_bias + self.scale_factor * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]).reshape(N, H, W, 3)
             # out['scaling'] = torch.clamp(torch.exp(x[..., start_dim:start_dim+3].reshape(-1,3)), max=self.options['max_scaling']).reshape(N, H, W, 3)
             start_dim += 3
@@ -690,11 +718,6 @@ class TextureDecoder(torch.nn.Module):
         if self.options['gen_rotation']:
             out['rotation'] = torch.nn.functional.normalize(x[..., start_dim:start_dim+4].reshape(-1,4).reshape(N, H, W, 4)) # check consistency before/after normalize: passed. Use: x[2,2,3,7:11]/out['rotation'][2,:,2,3]
             start_dim += 4
-        
-        if self.options['gen_xyz_offset']:
-            # out['xyz_offset'] = self.xyz_offset_scale * torch.nn.functional.normalize(x[..., start_dim:start_dim+3]) # TODO: whether use this normalize? May constrain the offset not deviate too much
-            out['xyz_offset'] = self.offset_conv(x[..., start_dim:start_dim+3].permute(0,3,1,2)).permute(0,2,3,1)
-            start_dim += 3
 
 
         # x.permute(0, 3, 1, 2)

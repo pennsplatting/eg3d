@@ -228,7 +228,7 @@ class ImageFolderDataset(Dataset):
         if image.ndim == 2:
             image = image[:, :, np.newaxis] # HW => HWC
 
-        image = image.transpose(2, 0, 1) # HWC => CHW
+        image = image.transpose(2, 0, 1) # .astype(np.float32) # HWC => CHW
         # image = image.reshape((res, 4, 
         #                        res, 4, 3)).max(3).max(1)
         image = F.interpolate(torch.tensor(image).unsqueeze(0), size=(self._resolution, self._resolution), mode='bilinear', align_corners=False).squeeze()
